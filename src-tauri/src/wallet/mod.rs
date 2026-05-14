@@ -15,11 +15,9 @@ use neptune_cash::api::export::Tip5;
 use neptune_cash::api::export::Utxo;
 use neptune_cash::application::config::data_directory::DataDirectory;
 use neptune_cash::prelude::tasm_lib::prelude::Digest;
-use neptune_cash::prelude::twenty_first::prelude::Mmr;
 use neptune_cash::state::wallet::incoming_utxo::IncomingUtxo;
 use neptune_cash::state::wallet::wallet_entropy::WalletEntropy;
 use neptune_cash::util_types::mutator_set::commit;
-use neptune_cash::util_types::mutator_set::mutator_set_accumulator::MutatorSetAccumulator;
 use neptune_cash::util_types::mutator_set::removal_record::absolute_index_set::AbsoluteIndexSet;
 use pending::TransactionUpdater;
 use rayon::prelude::*;
@@ -157,7 +155,7 @@ impl WalletState {
 
     pub(crate) async fn update_new_tip(
         &self,
-        previous_mutator_set_accumulator: &MutatorSetAccumulator,
+        num_aocl_leafs_prior_to_this_block: u64,
         block: &WalletBlock,
         should_update: bool,
     ) -> Result<Option<u64>> {
@@ -196,12 +194,13 @@ impl WalletState {
             .collect::<std::collections::HashMap<_, _>>();
 
         debug!("iterate addition records");
-        let num_aocl_leafs = previous_mutator_set_accumulator.aocl.num_leafs();
-        for (num_aocl_leafs, addition_record) in (num_aocl_leafs..).zip(addition_records.iter()) {
+        for (aocl_leaf_index, addition_record) in
+            (num_aocl_leafs_prior_to_this_block..).zip(addition_records.iter())
+        {
             if let Some(incoming_utxo) = incoming.get(addition_record) {
                 let r = incoming_utxo_recovery_data_from_incomming_utxo(
                     incoming_utxo.clone(),
-                    num_aocl_leafs,
+                    aocl_leaf_index,
                 );
                 assert_eq!(
                     *addition_record,
@@ -498,13 +497,101 @@ fn incoming_utxo_recovery_data_from_incomming_utxo(
 #[cfg(test)]
 mod tests {
     use neptune_cash::api::export::NativeCurrencyAmount;
+    use neptune_cash::api::export::SpendingKey;
     use neptune_cash::application::json_rpc::core::model::wallet::block::RpcWalletBlock;
+    use neptune_cash::prelude::twenty_first::prelude::Mmr;
     use neptune_cash::protocol::consensus::block::Block;
     use tracing_test::traced_test;
 
     use super::*;
     use crate::tests::create_wallet_db;
+    use crate::tests::wallet_block_from_test_data;
     use crate::wallet::sync::SyncState;
+
+    impl WalletState {
+        fn get_future_spending_keys(&self) -> Vec<(u64, std::sync::Arc<SpendingKey>)> {
+            let last_gen_key = self.num_generation_spending_keys() + self.scan_config.num_keys;
+            let last_sym_key = self.num_symmetric_keys() + self.scan_config.num_keys;
+
+            let mut keys = self.get_future_generation_spending_keys(Range {
+                start: 0,
+                end: last_gen_key,
+            });
+            keys.extend(self.get_future_symmetric_keys(Range {
+                start: 0,
+                end: last_sym_key,
+            }));
+
+            keys
+        }
+    }
+
+    #[traced_test]
+    #[tokio::test]
+    async fn print_future_addresses() {
+        // Verify that generation and symmetric keys of higher indices can be
+        // found.
+        let network = Network::Main;
+        let config = WalletConfig {
+            id: 0,
+            key: WalletEntropy::devnet_wallet(),
+            scan_config: ScanConfig {
+                num_keys: 20,
+                start_height: 0,
+            },
+            network,
+        };
+
+        let db_path = create_wallet_db().await;
+        let wallet_state = WalletState::new(config, &db_path).await.unwrap();
+
+        println!("Known addresses:");
+        for key in wallet_state.get_known_spending_keys() {
+            println!("{}", key.to_address().to_display_bech32m(network).unwrap());
+        }
+
+        println!("Future addresses:");
+        for (i, key) in wallet_state.get_future_spending_keys() {
+            println!(
+                "{i}: {}",
+                key.to_address().to_display_bech32m(network).unwrap()
+            );
+        }
+    }
+
+    #[traced_test]
+    #[tokio::test]
+    async fn credits_utxo_to_address_with_derivation_index_1() {
+        let network = Network::Main;
+        let config = WalletConfig {
+            id: 0,
+            key: WalletEntropy::devnet_wallet(),
+            scan_config: ScanConfig {
+                num_keys: 100,
+                start_height: 0,
+            },
+            network,
+        };
+
+        let db_path = create_wallet_db().await;
+
+        let wallet_state = WalletState::new(config, &db_path).await.unwrap();
+
+        let block_38260 = wallet_block_from_test_data(38260).unwrap();
+
+        let num_aocl_leafs_prior = block_38260.mutator_set_accumulator_after().aocl.num_leafs()
+            - block_38260.all_addition_records().len() as u64;
+        wallet_state
+            .update_new_tip(num_aocl_leafs_prior, &block_38260, false)
+            .await
+            .unwrap();
+
+        // Genesis block was never retrieved, so only income in block 38260
+        // should be registered: 0.75 NPT.
+        let three_quarters =
+            NativeCurrencyAmount::coins(1).half() + NativeCurrencyAmount::coins(1).half().half();
+        assert_eq!(three_quarters, wallet_state.get_balance().await.unwrap());
+    }
 
     #[traced_test]
     #[tokio::test]
@@ -534,7 +621,7 @@ mod tests {
             .await
             .unwrap();
         wallet_state
-            .update_new_tip(&MutatorSetAccumulator::default(), &genesis, false)
+            .update_new_tip(0, &genesis, false)
             .await
             .unwrap();
 

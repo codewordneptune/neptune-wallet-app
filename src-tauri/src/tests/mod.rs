@@ -1,9 +1,13 @@
 use std::env;
+use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
+use neptune_cash::application::json_rpc::core::model::wallet::block::RpcWalletBlock;
 use rand::distr::Alphanumeric;
 use rand::distr::SampleString;
+
+use crate::wallet::wallet_block::WalletBlock;
 
 /// Create a database path in a randomly named directory so filesystem-bound
 /// tests can run in parallel.
@@ -35,4 +39,14 @@ pub(crate) async fn snapshot_dir_path() -> PathBuf {
     let dir = unit_test_dir();
     tokio::fs::create_dir_all(&dir).await.unwrap();
     dir
+}
+
+pub(crate) fn wallet_block_from_test_data(block_height: u64) -> Option<WalletBlock> {
+    let file_path = format!("test_data/block_{}.bin", block_height);
+
+    let file_bytes = fs::read(file_path).ok()?;
+
+    let rpc_block: RpcWalletBlock = bincode::deserialize(&file_bytes).ok()?;
+
+    Some(rpc_block.into())
 }

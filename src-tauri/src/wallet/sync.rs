@@ -9,6 +9,7 @@ use anyhow::Result;
 use neptune_cash::api::export::Network;
 use neptune_cash::api::export::SpendingKey;
 use neptune_cash::api::export::Timestamp;
+use neptune_cash::prelude::twenty_first::prelude::Mmr;
 use neptune_cash::protocol::consensus::block::Block;
 use neptune_cash::state::wallet::expected_utxo::ExpectedUtxo;
 use neptune_cash::state::wallet::expected_utxo::UtxoNotifier;
@@ -317,7 +318,7 @@ impl SyncState {
         if let Some(fork) = self
             .wallet
             .update_new_tip(
-                previous_mutator_set_accumulator,
+                previous_mutator_set_accumulator.aocl.num_leafs(),
                 &current_block,
                 should_update,
             )

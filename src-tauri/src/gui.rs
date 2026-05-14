@@ -155,10 +155,7 @@ async fn async_before_exit() {
     println!("Received shutdown signal");
     let app = crate::service::get_state::<tauri::AppHandle>();
     if let Err(e) = stop_rpc_server().await {
-        crate::service::app::error_dialog(
-            &app,
-            &format!("Failed to stop rpc server {}", &e.to_string()),
-        );
+        crate::service::app::error_dialog(&app, &format!("Failed to stop rpc server: {e}"));
     }
 
     println!("gracefully shutdown");

@@ -113,7 +113,7 @@ impl super::WalletState {
                 .lustration_status()
                 .expect("If transaction requires lustration, lustration status must be set.");
             return Err(SendError::RequiresLustration(LustrationError(format!(
-                "All inputs with AOCL ranges at or below {} must lustration. \
+                "All inputs with AOCL ranges at or below {} must lustrate. \
                  You must accept lustrations before making this transaction.",
                 lustration_status.max_lustrating_aocl_leaf_index
             ))));
