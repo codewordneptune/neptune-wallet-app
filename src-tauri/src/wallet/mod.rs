@@ -88,26 +88,18 @@ impl WalletState {
 
     pub(crate) async fn new(wallet_config: WalletConfig, database: &PathBuf) -> Result<Self> {
         let pool = {
-            #[cfg(test)]
-            {
-                let _ = database;
-                sqlx::SqlitePool::connect("sqlite::memory:").await?
-            }
-            #[cfg(not(test))]
-            {
-                let options = sqlx::sqlite::SqliteConnectOptions::new()
-                    .filename(database)
-                    .create_if_missing(true);
+            let options = sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(database)
+                .create_if_missing(true);
 
-                sqlx::SqlitePool::connect_with(options)
-                    .await
-                    .map_err(|err| {
-                        anyhow::anyhow!(
-                            "Could not connect to database: {err}. Path: {}",
-                            database.to_string_lossy()
-                        )
-                    })?
-            }
+            sqlx::SqlitePool::connect_with(options)
+                .await
+                .map_err(|err| {
+                    anyhow::anyhow!(
+                        "Could not connect to database: {err}. Path: {}",
+                        database.to_string_lossy()
+                    )
+                })?
         };
 
         let num_future_keys = wallet_config.scan_config.num_keys;

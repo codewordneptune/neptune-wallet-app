@@ -551,7 +551,8 @@ mod tests {
             network: Network::Main,
         };
 
-        let wallet_state = WalletState::new(config, &PathBuf::new()).await.unwrap();
+        let db_path = test_wallet_db().await;
+        let wallet_state = WalletState::new(config, &db_path).await.unwrap();
 
         wallet_state.migrate_tables().await.unwrap();
 
