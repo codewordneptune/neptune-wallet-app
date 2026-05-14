@@ -155,7 +155,6 @@ impl WalletState {
 
     pub(crate) async fn update_new_tip(
         &self,
-        num_aocl_leafs_prior_to_this_block: u64,
         block: &WalletBlock,
         should_update: bool,
     ) -> Result<Option<u64>> {
@@ -194,6 +193,7 @@ impl WalletState {
             .collect::<std::collections::HashMap<_, _>>();
 
         debug!("iterate addition records");
+        let num_aocl_leafs_prior_to_this_block = block.num_aocl_leafs_prior();
         for (aocl_leaf_index, addition_record) in
             (num_aocl_leafs_prior_to_this_block..).zip(addition_records.iter())
         {
@@ -579,10 +579,8 @@ mod tests {
 
         let block_38260 = wallet_block_from_test_data(38260).unwrap();
 
-        let num_aocl_leafs_prior = block_38260.mutator_set_accumulator_after().aocl.num_leafs()
-            - block_38260.all_addition_records().len() as u64;
         wallet_state
-            .update_new_tip(num_aocl_leafs_prior, &block_38260, false)
+            .update_new_tip(&block_38260, false)
             .await
             .unwrap();
 
@@ -620,10 +618,7 @@ mod tests {
             .add_expected_utxo(expected_utxos)
             .await
             .unwrap();
-        wallet_state
-            .update_new_tip(0, &genesis, false)
-            .await
-            .unwrap();
+        wallet_state.update_new_tip(&genesis, false).await.unwrap();
 
         assert_eq!(
             NativeCurrencyAmount::coins(20),

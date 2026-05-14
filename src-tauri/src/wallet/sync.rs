@@ -9,11 +9,9 @@ use anyhow::Result;
 use neptune_cash::api::export::Network;
 use neptune_cash::api::export::SpendingKey;
 use neptune_cash::api::export::Timestamp;
-use neptune_cash::prelude::twenty_first::prelude::Mmr;
 use neptune_cash::protocol::consensus::block::Block;
 use neptune_cash::state::wallet::expected_utxo::ExpectedUtxo;
 use neptune_cash::state::wallet::expected_utxo::UtxoNotifier;
-use neptune_cash::util_types::mutator_set::mutator_set_accumulator::MutatorSetAccumulator;
 use serde::Serialize;
 use tokio::select;
 use tokio::sync::Mutex;
@@ -168,24 +166,6 @@ impl SyncState {
         let start = self.wallet.start_height().await?;
         debug!("start set to: {start}");
 
-        let network = self.wallet.network;
-        let mut previous_mutator_set_accumulator = match start {
-            0 => MutatorSetAccumulator::default(),
-            1 => Block::genesis(network).mutator_set_accumulator_after()?,
-            _ => {
-                let context = format!(
-                    "Prev block does not exist. Could not get block with height {}",
-                    start - 1
-                );
-                let block = self
-                    .fake_archival_state
-                    .get_block_by_height(start - 1)
-                    .await?
-                    .context(context)?;
-                block.mutator_set_accumulator_after()
-            }
-        };
-
         self.update(if start > 1 { start - 1 } else { start });
         self.height.store(start, Ordering::Relaxed);
 
@@ -203,10 +183,7 @@ impl SyncState {
         self.syncing.store(1, Ordering::Relaxed);
 
         loop {
-            match self
-                .sync_height(&mut previous_mutator_set_accumulator)
-                .await
-            {
+            match self.sync_height().await {
                 Ok(duration) => {
                     if let Some(duration) = duration {
                         self.syncing.store(SYNC_PAUSED, Ordering::Relaxed);
@@ -248,10 +225,7 @@ impl SyncState {
             }
         }
     }
-    async fn sync_height(
-        &self,
-        previous_mutator_set_accumulator: &mut MutatorSetAccumulator,
-    ) -> Result<Option<Duration>> {
+    async fn sync_height(&self) -> Result<Option<Duration>> {
         if self.syncing.load(Ordering::Relaxed) != SYNC_SYNCING {
             self.syncing.store(SYNC_PAUSED, Ordering::Relaxed);
             return Ok(Some(Duration::from_secs(1)));
@@ -303,8 +277,6 @@ impl SyncState {
 
         debug!("get block done: {}", current_height);
 
-        let current_mutator_set_accumulator = current_block.mutator_set_accumulator_after();
-
         debug!("update wallet state with new block: {}", current_height);
 
         let mut should_update = self.updated_to_tip.load(Ordering::Relaxed) == 1;
@@ -317,23 +289,11 @@ impl SyncState {
 
         if let Some(fork) = self
             .wallet
-            .update_new_tip(
-                previous_mutator_set_accumulator.aocl.num_leafs(),
-                &current_block,
-                should_update,
-            )
+            .update_new_tip(&current_block, should_update)
             .await
             .context("update wallet state error")?
         {
             info!("fork at height: {}", fork);
-
-            let fork_block = self
-                .fake_archival_state
-                .get_block_by_height(fork)
-                .await
-                .context(format!("failed to get block at height: {}", fork))?
-                .context("fork block not found")?;
-            *previous_mutator_set_accumulator = fork_block.mutator_set_accumulator_after();
 
             self.update(fork);
             self.fake_archival_state
@@ -348,8 +308,6 @@ impl SyncState {
             "update wallet state with new block done: {}",
             current_height
         );
-
-        *previous_mutator_set_accumulator = current_mutator_set_accumulator;
 
         let now = Timestamp::now().to_millis();
         if now - LAST_SYNC_EVENT_TIME.load(Ordering::Relaxed) > 100 {
