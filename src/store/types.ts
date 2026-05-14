@@ -20,6 +20,9 @@ export interface Wallet {
   name: string;
   address: string;
   balance: string;
+  num_generation_addresses: number;
+  num_symmetric_addresses: number;
+  num_secret_addresses: number;
 }
 
 export interface AboutState {

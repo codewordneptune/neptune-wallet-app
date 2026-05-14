@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
 use std::path::PathBuf;
 use std::range::Range;
 use std::sync::atomic::AtomicU64;
@@ -79,6 +80,29 @@ impl WalletState {
         Ok(wallet_dir.join("wallet_state.db"))
     }
 
+    async fn wallet_database_internal(database: &Path) -> Result<Pool<Sqlite>> {
+        let options = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(database)
+            .create_if_missing(true);
+
+        sqlx::SqlitePool::connect_with(options)
+            .await
+            .map_err(|err| {
+                anyhow::anyhow!(
+                    "Could not connect to database: {err}. Path: {}",
+                    database.to_string_lossy()
+                )
+            })
+    }
+
+    pub(crate) async fn wallet_database_connection(
+        config: &Config,
+        id: i64,
+    ) -> Result<Pool<Sqlite>> {
+        let database = Self::wallet_database_path(config, id).await?;
+        Self::wallet_database_internal(&database).await
+    }
+
     pub(crate) async fn wallet_path(config: &Config, id: i64) -> Result<PathBuf> {
         let data_dir = config.get_data_dir().await?;
         let network = config.get_network().await?;
@@ -86,21 +110,8 @@ impl WalletState {
         Ok(wallet_dir)
     }
 
-    pub(crate) async fn new(wallet_config: WalletConfig, database: &PathBuf) -> Result<Self> {
-        let pool = {
-            let options = sqlx::sqlite::SqliteConnectOptions::new()
-                .filename(database)
-                .create_if_missing(true);
-
-            sqlx::SqlitePool::connect_with(options)
-                .await
-                .map_err(|err| {
-                    anyhow::anyhow!(
-                        "Could not connect to database: {err}. Path: {}",
-                        database.to_string_lossy()
-                    )
-                })?
-        };
+    pub(crate) async fn new(wallet_config: WalletConfig, database: &Path) -> Result<Self> {
+        let pool = Self::wallet_database_internal(database).await?;
 
         let num_future_keys = wallet_config.scan_config.num_keys;
 

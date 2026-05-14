@@ -8,6 +8,7 @@ use serde::Serialize;
 use sqlx::Row;
 
 use super::Config;
+use crate::wallet::WalletState;
 
 impl Config {
     pub(crate) async fn get_current_wallet(&self) -> Result<WalletConfig> {
@@ -104,11 +105,29 @@ impl Config {
             let name = row.get::<String, _>("name");
             let address = row.get::<String, _>("address");
             let balance = row.get::<String, _>("balance");
+
+            // 2. Open a temporary connection to JUST this wallet database such
+            // that the number of keys per wallet can be read.
+            let wallet_pool = WalletState::wallet_database_connection(self, id).await?;
+            let gen_key_idx = WalletState::generation_key_index_from_pool(&wallet_pool)
+                .await
+                .unwrap_or(0);
+            let sym_key_idx = WalletState::symmetric_key_index_from_pool(&wallet_pool)
+                .await
+                .unwrap_or(0);
+            let sec_key_idx = 0; // TODO: add support when secret addresses are added
+
+            wallet_pool.close().await; // Clean up
+
             wallets.push(WalletData {
                 id,
                 name,
                 address,
                 balance,
+                // Number of keys is the max index plus 1
+                num_generation_addresses: gen_key_idx + 1,
+                num_symmetric_addresses: sym_key_idx + 1,
+                num_secret_addresses: sec_key_idx + 1,
             })
         }
         Ok(wallets)
@@ -146,6 +165,9 @@ pub(crate) struct WalletData {
     name: String,
     address: String,
     balance: String,
+    num_generation_addresses: u64,
+    num_symmetric_addresses: u64,
+    num_secret_addresses: u64,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

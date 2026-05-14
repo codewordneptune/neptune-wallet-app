@@ -9,6 +9,7 @@ import { queryWalletBalance, queryWallets } from "@/store/wallet/wallet-slice";
 import { ellipsis } from "@/utils/ellipsis-format";
 import { deleteContactAddress } from "@/utils/storage";
 import {
+  Badge,
   Box,
   Button,
   Flex,
@@ -155,6 +156,20 @@ export default function WalletTable() {
             NPT
           </Flex>
         }
+      </Table.Td>
+      <Table.Td>
+        <Flex direction="row" gap={8} align="center">
+          <Badge color="blue" variant="light" size="sm" title="Generation Addresses">
+            {element.num_generation_addresses} Gen
+          </Badge>
+          <Badge color="violet" variant="light" size="sm" title="Symmetric Addresses">
+            {element.num_symmetric_addresses} Sym
+          </Badge>
+          {/* Ready for the secret addresses */}
+          {/* <Badge color="orange" variant="light" size="sm" title="Secret Address Keys"> */}
+          {/* {element.num_secret_addresses} Sec */}
+          {/* </Badge> */}
+        </Flex>
       </Table.Td>
       <Table.Td>
         <ActionMenu

@@ -6,6 +6,7 @@ use neptune_cash::prelude::tasm_lib::prelude::Digest;
 use neptune_cash::state::wallet::expected_utxo::ExpectedUtxo;
 use serde::Deserialize;
 use serde::Serialize;
+use sqlx::Pool;
 use sqlx::Row;
 use sqlx::Sqlite;
 use sqlx::SqliteConnection;
@@ -225,10 +226,10 @@ impl WalletState {
         Ok(())
     }
 
-    pub(crate) async fn get_symmetric_key_index(&self) -> Result<u64> {
+    pub(crate) async fn symmetric_key_index_from_pool(pool: &Pool<Sqlite>) -> Result<u64> {
         let row =
             sqlx::query("SELECT value FROM wallet_state_keys WHERE id = 'num_symmetric_keys'")
-                .fetch_one(&self.pool)
+                .fetch_one(pool)
                 .await;
 
         match row {
@@ -236,6 +237,10 @@ impl WalletState {
             Err(sqlx::Error::RowNotFound) => Ok(0),
             Err(err) => Err(err)?,
         }
+    }
+
+    pub(crate) async fn get_symmetric_key_index(&self) -> Result<u64> {
+        Self::symmetric_key_index_from_pool(&self.pool).await
     }
 
     pub(crate) async fn set_generation_key_index(&self, value: u64) -> Result<()> {
@@ -249,11 +254,11 @@ impl WalletState {
         Ok(())
     }
 
-    pub(crate) async fn get_generation_key_index(&self) -> Result<u64> {
+    pub(crate) async fn generation_key_index_from_pool(pool: &Pool<Sqlite>) -> Result<u64> {
         let row = sqlx::query(
             "SELECT value FROM wallet_state_keys WHERE id = 'num_generation_spending_keys'",
         )
-        .fetch_one(&self.pool)
+        .fetch_one(pool)
         .await;
 
         match row {
@@ -261,6 +266,10 @@ impl WalletState {
             Err(sqlx::Error::RowNotFound) => Ok(0),
             Err(err) => Err(err)?,
         }
+    }
+
+    pub(crate) async fn get_generation_key_index(&self) -> Result<u64> {
+        Self::generation_key_index_from_pool(&self.pool).await
     }
 
     pub(crate) async fn set_tip(
