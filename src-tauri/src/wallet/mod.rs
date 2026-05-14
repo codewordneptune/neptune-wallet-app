@@ -620,7 +620,7 @@ mod tests {
             "Persisted key index must be 1"
         );
 
-        // In block 38'269, the wallet sends 0.75 NPT, and receives 0.50 NPT.
+        // In block 38'289, the wallet sends 0.75 NPT, and receives 0.50 NPT.
         // Output is received on gen key with index 2.
         block_height += 1;
         while block_height < 38290 {
