@@ -156,6 +156,7 @@ pub(crate) struct ScanConfig {
     pub(crate) start_height: u64,
 }
 
+#[derive(Debug, Clone)]
 pub(crate) struct WalletConfig {
     pub(crate) id: i64,
     pub(crate) key: WalletEntropy,

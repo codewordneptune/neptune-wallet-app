@@ -18,25 +18,25 @@ impl super::WalletState {
     pub(crate) fn get_known_spending_keys(&self) -> Vec<SpendingKey> {
         let spending_keys = self.get_future_generation_spending_keys(Range {
             start: 0,
-            end: self.num_generation_spending_keys() + 1,
+            end: self.generation_key_index() + 1,
         });
         let spending_keys = spending_keys.iter().map(|v| *v.1.deref());
 
         let symmetric_keys = self.get_future_symmetric_keys(Range {
             start: 0,
-            end: self.num_symmetric_keys() + 1,
+            end: self.symmetric_key_index() + 1,
         });
         let symmetric_keys = symmetric_keys.iter().map(|v| *v.1.deref());
 
         spending_keys.chain(symmetric_keys).collect()
     }
 
-    pub(crate) fn num_symmetric_keys(&self) -> u64 {
-        self.num_symmetric_keys.load(Ordering::Relaxed)
+    pub(crate) fn symmetric_key_index(&self) -> u64 {
+        self.symmetric_key_index.load(Ordering::Relaxed)
     }
 
-    pub(crate) fn num_generation_spending_keys(&self) -> u64 {
-        self.num_generation_spending_keys.load(Ordering::Relaxed)
+    pub(crate) fn generation_key_index(&self) -> u64 {
+        self.generation_key_index.load(Ordering::Relaxed)
     }
 
     pub(crate) fn num_future_keys(&self) -> u64 {

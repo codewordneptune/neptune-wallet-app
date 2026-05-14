@@ -212,7 +212,7 @@ impl WalletState {
         Ok(())
     }
 
-    pub(crate) async fn set_num_symmetric_keys(&self, value: u64) -> Result<()> {
+    pub(crate) async fn set_symmetric_key_index(&self, value: u64) -> Result<()> {
         let value_db = value.to_string();
         sqlx::query("INSERT INTO wallet_state_keys (id, value) VALUES ('num_symmetric_keys', ?) ON CONFLICT(id) DO UPDATE SET value = ?")
             .bind(&value_db)
@@ -220,12 +220,12 @@ impl WalletState {
             .execute(&self.pool)
             .await?;
 
-        self.num_symmetric_keys.store(value, Ordering::Relaxed);
+        self.symmetric_key_index.store(value, Ordering::Relaxed);
 
         Ok(())
     }
 
-    pub(crate) async fn get_num_symmetric_keys(&self) -> Result<u64> {
+    pub(crate) async fn get_symmetric_key_index(&self) -> Result<u64> {
         let row =
             sqlx::query("SELECT value FROM wallet_state_keys WHERE id = 'num_symmetric_keys'")
                 .fetch_one(&self.pool)
@@ -238,18 +238,18 @@ impl WalletState {
         }
     }
 
-    pub(crate) async fn set_num_generation_spending_keys(&self, value: u64) -> Result<()> {
+    pub(crate) async fn set_generation_key_index(&self, value: u64) -> Result<()> {
+        trace!("setting generation key index to: {value}");
         let value_db = value.to_string();
         sqlx::query("INSERT INTO wallet_state_keys (id, value) VALUES ('num_generation_spending_keys', ?) ON CONFLICT(id) DO UPDATE SET value = ?")
             .bind(&value_db)
             .bind(&value_db)
             .execute(&self.pool).await?;
-        self.num_generation_spending_keys
-            .store(value, Ordering::Relaxed);
+        self.generation_key_index.store(value, Ordering::Relaxed);
         Ok(())
     }
 
-    pub(crate) async fn get_num_generation_spending_keys(&self) -> Result<u64> {
+    pub(crate) async fn get_generation_key_index(&self) -> Result<u64> {
         let row = sqlx::query(
             "SELECT value FROM wallet_state_keys WHERE id = 'num_generation_spending_keys'",
         )
@@ -531,14 +531,13 @@ impl WalletState {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
     use neptune_cash::api::export::Network;
     use neptune_cash::state::wallet::wallet_entropy::WalletEntropy;
 
     use super::*;
     use crate::config::wallet::ScanConfig;
     use crate::config::wallet::WalletConfig;
+    use crate::tests::test_wallet_db;
     #[tokio::test]
     async fn test_migrate_tables() {
         let config = WalletConfig {
@@ -556,19 +555,10 @@ mod tests {
 
         wallet_state.migrate_tables().await.unwrap();
 
-        wallet_state.set_num_symmetric_keys(1).await.unwrap();
-        wallet_state
-            .set_num_generation_spending_keys(2)
-            .await
-            .unwrap();
+        wallet_state.set_symmetric_key_index(1).await.unwrap();
+        wallet_state.set_generation_key_index(2).await.unwrap();
 
-        assert_eq!(wallet_state.get_num_symmetric_keys().await.unwrap(), 1);
-        assert_eq!(
-            wallet_state
-                .get_num_generation_spending_keys()
-                .await
-                .unwrap(),
-            2
-        );
+        assert_eq!(wallet_state.get_symmetric_key_index().await.unwrap(), 1);
+        assert_eq!(wallet_state.get_generation_key_index().await.unwrap(), 2);
     }
 }

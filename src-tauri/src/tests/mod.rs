@@ -28,7 +28,7 @@ pub(crate) fn unit_test_dir() -> PathBuf {
 
 /// Create a directory for a unit test database, and return the full path of
 /// the wallet database file that can be created in that directory.
-pub(crate) async fn create_wallet_db() -> PathBuf {
+pub(crate) async fn test_wallet_db() -> PathBuf {
     let dir = unit_test_dir();
     tokio::fs::create_dir_all(&dir).await.unwrap();
     dir.join("wallet.db")
