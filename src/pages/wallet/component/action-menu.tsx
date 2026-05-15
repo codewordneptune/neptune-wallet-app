@@ -1,16 +1,24 @@
 import { ActionIcon, Center, Menu, Text } from "@mantine/core";
-import { IconArrowBarToUp, IconDots, IconExchange, IconTrash } from "@tabler/icons-react";
+import {
+  IconArrowBarToDown,
+  IconArrowBarToUp,
+  IconDots,
+  IconExchange,
+  IconTrash,
+} from "@tabler/icons-react";
 
 export default function ActionMenu({
   isCurrentWallet,
   switchWallet,
   removeWallet,
   exportWallet,
+  importRandomness,
 }: {
   isCurrentWallet: boolean;
   switchWallet: () => void;
   removeWallet: () => void;
   exportWallet: () => void;
+  importRandomness: () => void;
 }) {
   return (
     <Menu shadow="md" width={165} position="bottom-end">
@@ -37,6 +45,10 @@ export default function ActionMenu({
           onClick={removeWallet}
         >
           <Text>Remove Wallet</Text>
+        </Menu.Item>
+        <Menu.Divider />
+        <Menu.Item leftSection={<IconArrowBarToDown size={14} />} onClick={importRandomness}>
+          <Text>Import Randomness</Text>
         </Menu.Item>
         <Menu.Divider />
         <Menu.Item leftSection={<IconArrowBarToUp size={14} />} onClick={exportWallet}>

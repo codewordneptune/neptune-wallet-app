@@ -7,6 +7,7 @@ import { Wallet } from "@/store/types";
 import { useCurrentWalledId, useLoadingWallets, useWallets } from "@/store/wallet/hooks";
 import { queryWalletBalance, queryWallets } from "@/store/wallet/wallet-slice";
 import { ellipsis } from "@/utils/ellipsis-format";
+import { handleImportRandomness } from "@/utils/import-wallet-randomness";
 import { deleteContactAddress } from "@/utils/storage";
 import {
   Badge,
@@ -179,6 +180,7 @@ export default function WalletTable() {
             onClickRemoveWallet(element);
           }}
           exportWallet={() => onClickExportWallet(element)}
+          importRandomness={handleImportRandomness}
         />
       </Table.Td>
     </Table.Tr>
