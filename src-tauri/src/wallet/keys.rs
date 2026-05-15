@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use neptune_cash::api::export::SpendingKey;
+use neptune_cash::api::export::SymmetricKey;
 use rayon::prelude::*;
 
 impl super::WalletState {
@@ -48,7 +49,8 @@ impl super::WalletState {
         range: Range<u64>,
     ) -> Vec<(u64, Arc<SpendingKey>)> {
         let key = &self.key;
-        (range.start..range.end)
+
+        let well_formed: Vec<_> = (range.start..range.end)
             .into_par_iter()
             .map(|i| {
                 if let Some(key) = self.key_cache.get_symmetric_key(i) {
@@ -58,7 +60,23 @@ impl super::WalletState {
                 self.key_cache.add_symmetric_key(i, new_key.clone());
                 (i, new_key)
             })
-            .collect()
+            .collect();
+
+        let malformed: Vec<_> = if self.scan_config.recover_from_sym_digest_keys {
+            (range.start..range.end)
+                .into_par_iter()
+                .map(|i| {
+                    let key = Arc::new(SpendingKey::from(key.nth_symmetric_key(i)));
+                    let key = SymmetricKey::from_seed(key.privacy_preimage());
+                    let key: SpendingKey = key.into();
+                    (i, Arc::new(key))
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+
+        [well_formed, malformed].concat()
     }
 
     pub(crate) fn get_future_generation_spending_keys(

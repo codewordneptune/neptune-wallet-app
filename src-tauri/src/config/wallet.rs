@@ -176,6 +176,9 @@ pub(crate) struct ScanConfig {
     pub(crate) num_keys: u64,
     #[serde(default)]
     pub(crate) start_height: u64,
+
+    #[serde(default)]
+    pub(crate) recover_from_sym_digest_keys: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -191,6 +194,7 @@ impl Default for ScanConfig {
         Self {
             num_keys: default_num_keys(),
             start_height: 0,
+            recover_from_sym_digest_keys: false,
         }
     }
 }

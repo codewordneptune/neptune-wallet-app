@@ -555,6 +555,7 @@ mod tests {
             scan_config: ScanConfig {
                 num_keys: 1,
                 start_height: 0,
+                ..Default::default()
             },
             network: Network::Main,
         };

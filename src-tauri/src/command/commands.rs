@@ -107,6 +107,7 @@ pub(crate) async fn add_wallet(
     let wallet_config = ScanConfig {
         num_keys,
         start_height,
+        recover_from_sym_digest_keys: false,
     };
 
     let config = crate::service::get_state::<Arc<Config>>();

@@ -512,6 +512,7 @@ mod tests {
     use neptune_cash::api::export::SpendingKey;
     use neptune_cash::application::json_rpc::core::model::wallet::block::RpcWalletBlock;
     use neptune_cash::protocol::consensus::block::Block;
+    use num_traits::Zero;
     use tracing_test::traced_test;
 
     use super::*;
@@ -549,6 +550,7 @@ mod tests {
             scan_config: ScanConfig {
                 num_keys: 20,
                 start_height: 0,
+                ..Default::default()
             },
             network,
         };
@@ -587,6 +589,7 @@ mod tests {
             scan_config: ScanConfig {
                 num_keys: 100,
                 start_height: 0,
+                ..Default::default()
             },
             network,
         };
@@ -671,6 +674,7 @@ mod tests {
             scan_config: ScanConfig {
                 num_keys: 100,
                 start_height: 0,
+                recover_from_sym_digest_keys: false,
             },
             network,
         };
@@ -724,6 +728,47 @@ mod tests {
 
     #[traced_test]
     #[tokio::test]
+    async fn recover_from_malformed_sym_address() {
+        // I accidently sent to the address `sym_key.to_display_bech32m` instead
+        // of `sym_key.to_bech32m` as I should have done. Luckily the former's
+        // seed is just the hash of the latter. So we can recover funds from
+        // both addresses. Setting the flag in scan-config allows for that.
+        let network = Network::Main;
+        let config = WalletConfig {
+            id: 0,
+            key: WalletEntropy::devnet_wallet(),
+            scan_config: ScanConfig {
+                num_keys: 100,
+                start_height: 0,
+                recover_from_sym_digest_keys: true,
+            },
+            network,
+        };
+
+        let db_path = test_wallet_db().await;
+        let wallet_state = WalletState::new(config.clone(), &db_path).await.unwrap();
+
+        let block = wallet_block_from_test_data(38333).unwrap();
+
+        assert!(
+            wallet_state.get_balance().await.unwrap().is_zero(),
+            "Empty balance before applying block"
+        );
+        wallet_state.update_new_tip(&block, false).await.unwrap();
+        assert!(
+            !wallet_state.get_balance().await.unwrap().is_zero(),
+            "Non-empty balance before applying block"
+        );
+
+        assert_eq!(
+            4,
+            wallet_state.symmetric_key_index(),
+            "Symmetric key index must be 4 after handling block, as key with index 4 got a UTXO in it"
+        );
+    }
+
+    #[traced_test]
+    #[tokio::test]
     async fn genesis_credits_devnet_wallet() {
         let network = Network::Main;
         let config = WalletConfig {
@@ -732,6 +777,7 @@ mod tests {
             scan_config: ScanConfig {
                 num_keys: 1,
                 start_height: 0,
+                ..Default::default()
             },
             network,
         };
