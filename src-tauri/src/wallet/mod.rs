@@ -390,11 +390,14 @@ impl WalletState {
             .map(|(utxo, _)| utxo)
             .collect_vec();
 
-        let receive = spend_to_spendingkeys
+        // Ensure no double count in case UTXO is both expected and announced.
+        // This is done by stroring all incoming UTXOs in a hash set, thus
+        // removing duplicates.
+        let receive: HashSet<_> = spend_to_spendingkeys
             .chain(spend_to_symmetrickeys)
             .chain(gusser_incoming_utxos)
             .chain(expected_utxos)
-            .collect::<Vec<_>>();
+            .collect();
 
         // Bump derivation indices. Must be done *after* the iterators above
         // have been consumed.
@@ -403,7 +406,7 @@ impl WalletState {
         self.set_symmetric_key_index(self.symmetric_key_index())
             .await?;
 
-        Ok(receive)
+        Ok(receive.into_iter().collect())
     }
 
     /// Return a list of UTXOs spent by this wallet in the transaction
