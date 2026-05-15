@@ -559,20 +559,27 @@ mod tests {
         println!("Known addresses:");
         for key in wallet_state.get_known_spending_keys() {
             println!("{}", key.to_address().to_display_bech32m(network).unwrap());
+            println!(
+                "receiver ID: {}; privacy_preimage: {}",
+                key.receiver_identifier(),
+                key.privacy_preimage()
+            );
         }
 
         println!("Future addresses:");
         for (i, key) in wallet_state.get_future_spending_keys() {
+            println!("{i}: {}", key.to_address().to_bech32m(network).unwrap());
             println!(
-                "{i}: {}",
-                key.to_address().to_display_bech32m(network).unwrap()
+                "receiver ID: {}; privacy_preimage: {:x}",
+                key.receiver_identifier(),
+                key.privacy_preimage()
             );
         }
     }
 
     #[traced_test]
     #[tokio::test]
-    async fn credits_utxo_to_address_with_derivation_index_1_and_2() {
+    async fn credits_utxo_to_gen_address_idx_1_and_2() {
         let network = Network::Main;
         let config = WalletConfig {
             id: 0,
@@ -585,7 +592,6 @@ mod tests {
         };
 
         let db_path = test_wallet_db().await;
-        println!("db_path: {}", db_path.to_string_lossy());
         let wallet_state = WalletState::new(config.clone(), &db_path).await.unwrap();
         assert_eq!(
             0,
@@ -593,6 +599,7 @@ mod tests {
             "Key index must be 0 prior to handling of block"
         );
 
+        let num_checked_addrs_before = wallet_state.get_future_spending_keys().len();
         let mut block_height = 38260;
         let block_38260 = wallet_block_from_test_data(block_height).unwrap();
 
@@ -613,10 +620,10 @@ mod tests {
         );
 
         // Verify that bumping of keys was persisted.
-        let wallet_stated_persisted1 = WalletState::new(config.clone(), &db_path).await.unwrap();
+        let wallet_state_persisted1 = WalletState::new(config.clone(), &db_path).await.unwrap();
         assert_eq!(
             1,
-            wallet_stated_persisted1.generation_key_index(),
+            wallet_state_persisted1.generation_key_index(),
             "Persisted key index must be 1"
         );
 
@@ -640,11 +647,78 @@ mod tests {
         );
 
         // Verify that bumping of keys was persisted.
-        let wallet_stated_persisted2 = WalletState::new(config, &db_path).await.unwrap();
+        let wallet_state_persisted2 = WalletState::new(config, &db_path).await.unwrap();
         assert_eq!(
             2,
-            wallet_stated_persisted2.generation_key_index(),
+            wallet_state_persisted2.generation_key_index(),
             "Persisted key index must be 2"
+        );
+        let num_checked_addrs_after = wallet_state.get_future_spending_keys().len();
+        assert_eq!(
+            num_checked_addrs_before + 2,
+            num_checked_addrs_after,
+            "Must check 2 more addresses since index was bumped by 2."
+        );
+    }
+
+    #[traced_test]
+    #[tokio::test]
+    async fn credits_utxo_to_sym_address_idx_4() {
+        let network = Network::Main;
+        let config = WalletConfig {
+            id: 0,
+            key: WalletEntropy::devnet_wallet(),
+            scan_config: ScanConfig {
+                num_keys: 100,
+                start_height: 0,
+            },
+            network,
+        };
+
+        let db_path = test_wallet_db().await;
+        let wallet_state = WalletState::new(config.clone(), &db_path).await.unwrap();
+        assert_eq!(
+            0,
+            wallet_state.symmetric_key_index(),
+            "Key index must be 0 prior to handling of block"
+        );
+
+        let block = wallet_block_from_test_data(38404).unwrap();
+
+        let num_checked_addrs_before = wallet_state.get_future_spending_keys().len();
+        wallet_state.update_new_tip(&block, false).await.unwrap();
+        assert_eq!(
+            4,
+            wallet_state.symmetric_key_index(),
+            "Symmetric key index must be 4 after handling block, as key with index 4 got a UTXO in it"
+        );
+
+        // Verify that bumping of keys was persisted.
+        let wallet_state_persisted = WalletState::new(config, &db_path).await.unwrap();
+        assert_eq!(
+            4,
+            wallet_state_persisted.symmetric_key_index(),
+            "Persisted key index must match key index"
+        );
+        assert_eq!(
+            num_checked_addrs_before + 4,
+            wallet_state_persisted.get_future_spending_keys().len(),
+            "Must check 4 more addresses since index was bumped by 4, persisted wallet."
+        );
+        assert_eq!(
+            num_checked_addrs_before + 4,
+            wallet_state.get_future_spending_keys().len(),
+            "Must check 4 more addresses since index was bumped by 4, non-persisted wallet."
+        );
+        assert_eq!(
+            NativeCurrencyAmount::coins(1).half().half(),
+            wallet_state.get_balance().await.unwrap(),
+            "Expected balance, non-persisted wallet"
+        );
+        assert_eq!(
+            NativeCurrencyAmount::coins(1).half().half(),
+            wallet_state_persisted.get_balance().await.unwrap(),
+            "Expected balance, persisted wallet"
         );
     }
 
