@@ -1,3 +1,4 @@
+import { IncomingUtxoRecoveryData } from "@/utils/import-wallet-randomness";
 import { invoke } from "@tauri-apps/api/core";
 
 export interface WalletData {
@@ -45,4 +46,10 @@ export async function ExportWallet(password: string, id: number): Promise<string
 
 export async function resetToHeight(height: number): Promise<string[]> {
   return await invoke("reset_to_height", { height });
+}
+
+export async function importIncomingRandomness(
+  payload: IncomingUtxoRecoveryData[]
+): Promise<string> {
+  return await invoke("import_incoming_randomness", { payload });
 }

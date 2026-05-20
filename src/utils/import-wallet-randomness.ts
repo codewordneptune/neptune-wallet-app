@@ -1,3 +1,4 @@
+import { importIncomingRandomness } from "@/commands/wallet";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readTextFile } from "@tauri-apps/plugin-fs";
 
@@ -15,7 +16,7 @@ export async function handleImportRandomness(): Promise<void> {
       multiple: false,
       filters: [
         {
-          name: "Neptune Randomness Data",
+          name: "Neptune Incoming Randomness Data",
           extensions: ["dat"],
         },
       ],
@@ -29,14 +30,16 @@ export async function handleImportRandomness(): Promise<void> {
     // 2. Read the file contents
     const fileContents = await readTextFile(selectedPath);
 
-    // 3. Parse the JSON data
-    const parsedData: IncomingUtxoRecoveryData | IncomingUtxoRecoveryData[] =
-      JSON.parse(fileContents);
+    // 3. Parse the JSON Lines (JSONL) data
+    const parsedData: IncomingUtxoRecoveryData[] = fileContents
+      .split(/\r?\n/) // Split by newline, handles both \n and \r\n
+      .filter((line) => line.trim() !== "") // Ignore empty lines (prevents JSON syntax errors)
+      .map((line) => JSON.parse(line)); // Parse each individual line into an object
 
     console.log("Successfully imported randomness:", parsedData);
 
     // 4. Pass the data back to your Rust backend for processing
-    // await invoke('process_imported_randomness', { payload: parsedData });
+    const _res = await importIncomingRandomness(parsedData);
 
     // TODO: Add a Mantine Notification here for success!
   } catch (error) {

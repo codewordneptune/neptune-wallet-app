@@ -1,6 +1,7 @@
 use std::ops::Deref;
 use std::sync::Arc;
 
+use neptune_cash::state::wallet::wallet_state::IncomingUtxoRecoveryData;
 use tracing::*;
 
 use super::tls;
@@ -170,4 +171,22 @@ pub(crate) async fn forget_tx(txid: String) -> Result<()> {
 #[cfg_attr(feature = "gui", tauri::command)]
 pub(crate) async fn get_tip_height() -> Result<u64> {
     WalletRpcImpl::get_tip_height().await.into_tauri_result()
+}
+
+#[cfg_attr(feature = "gui", tauri::command)]
+pub(crate) async fn import_incoming_randomness(
+    payload: Vec<IncomingUtxoRecoveryData>,
+) -> Result<String> {
+    // WalletRpcImpl::get_tip_height().await.into_tauri_result()
+    // println!("Received {} items for processing.", payload.len());
+    info!("Received {} incoming UTXOs for processing.", payload.len());
+
+    // TODO: Add your actual backend processing logic here
+
+    WalletRpcImpl::import_incoming_randomness(payload)
+        .await
+        .into_tauri_result()
+
+    // Return Ok to indicate success, or Err(String) if something fails
+    // Ok("missing function body".to_owned())
 }

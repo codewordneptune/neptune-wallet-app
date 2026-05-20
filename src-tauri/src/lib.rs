@@ -61,6 +61,7 @@ fn add_commands<R: tauri::Runtime>(invoke: tauri::ipc::Invoke<R>) -> bool {
         rpc::commands::stop_rpc_server,
         rpc::commands::sync_state,
         rpc::commands::wallet_balance,
+        rpc::commands::import_incoming_randomness,
         os::is_win11,
         os::os_info,
         os::platform,

@@ -10,6 +10,7 @@ use anyhow::Context;
 use anyhow::Result;
 use itertools::Itertools;
 use neptune_cash::api::export::AdditionRecord;
+use neptune_cash::api::export::NativeCurrencyAmount;
 use neptune_cash::api::export::Network;
 use neptune_cash::api::export::Timestamp;
 use neptune_cash::api::export::Tip5;
@@ -18,8 +19,10 @@ use neptune_cash::application::config::data_directory::DataDirectory;
 use neptune_cash::prelude::tasm_lib::prelude::Digest;
 use neptune_cash::state::wallet::incoming_utxo::IncomingUtxo;
 use neptune_cash::state::wallet::wallet_entropy::WalletEntropy;
+use neptune_cash::state::wallet::wallet_state::IncomingUtxoRecoveryData;
 use neptune_cash::util_types::mutator_set::commit;
 use neptune_cash::util_types::mutator_set::removal_record::absolute_index_set::AbsoluteIndexSet;
+use num_traits::Zero;
 use pending::TransactionUpdater;
 use rayon::prelude::*;
 use serde::Deserialize;
@@ -35,6 +38,7 @@ use wallet_state_table::UtxoDbData;
 use crate::config::wallet::ScanConfig;
 use crate::config::wallet::WalletConfig;
 use crate::config::Config;
+use crate::rpc_client;
 use crate::wallet::wallet_block::WalletBlock;
 
 // mod archive_state;
@@ -153,6 +157,112 @@ impl WalletState {
             self.scan_config.start_height
         );
         Ok(self.scan_config.start_height)
+    }
+
+    pub(crate) async fn import_randomness(
+        &self,
+        payload: Vec<IncomingUtxoRecoveryData>,
+    ) -> Result<NativeCurrencyAmount> {
+        // let mut tx = self.pool.begin().await?;
+
+        // Only consider not-already-tracked UTXOs
+        let mut not_claimed = vec![];
+        let already_claimed: HashSet<_> = self
+            // .get_unspent_utxos(&mut tx)
+            .get_utxos()
+            .await?
+            .into_iter()
+            .map(|x| x.recovery_data.abs_i())
+            .collect();
+
+        for recovery_data in payload {
+            let recovery_data: UtxoRecoveryData = recovery_data.into();
+            let absi = recovery_data.abs_i();
+            if already_claimed.contains(&absi) {
+                continue;
+            }
+
+            not_claimed.push(recovery_data);
+        }
+
+        info!(
+            "Found {} not-yet-claimed UTXOs in recovery data",
+            not_claimed.len()
+        );
+
+        let not_claimed_absis: HashSet<_> = not_claimed.iter().map(|x| x.abs_i()).collect();
+        let not_claimed_absis: Vec<_> = not_claimed_absis.into_iter().collect();
+        let spent = rpc_client::node_rpc_client()
+            .are_bloom_indices_set(not_claimed_absis)
+            .await?;
+
+        let filtered: Vec<_> = not_claimed
+            .into_iter()
+            .zip_eq(spent)
+            .filter(|&(_, spent)| !spent)
+            .map(|(val, _)| val)
+            .collect();
+
+        info!(
+            "Found {} not-yet-claimed and not-yet-spent UTXOs in recovery data",
+            filtered.len()
+        );
+
+        // Only recover not-yet-spent UTXOs
+        // Do this by asking server if absolute index sets have been applied
+
+        // for not_claimed in not_claimed {
+        // Ask server if
+        // }
+
+        // Goal: Call self.append_utxos(&mut tx, db_datas).await?;
+        // So we must construct db_datas
+
+        // We already have the cryptographic data -- now we just need to
+        // find the block data: were the UTXO was confirmed.
+
+        // #[derive(Clone, Debug, Serialize, Deserialize)]
+        // pub(crate) struct UtxoRecoveryData {
+        //     pub(crate) utxo: Utxo,
+        //     pub(crate) sender_randomness: Digest,
+        //     pub(crate) receiver_preimage: Digest,
+        //     pub(crate) aocl_index: u64,
+        // }
+        // pub(crate) struct UtxoDbData {
+        //     pub(crate) id: i64,
+        //     pub(crate) hash: String,
+        //     pub(crate) recovery_data: UtxoRecoveryData,
+        //     // hash of the block, if any, in which this UTXO was spent
+        //     pub(crate) spent_in_block: Option<UtxoBlockInfo>,
+
+        //     // hash of the block, if any, in which this UTXO was confirmed
+        //     pub(crate) confirmed_in_block: UtxoBlockInfo,
+
+        //     // this two values are used to rollback
+        //     pub(crate) confirm_height: i64,
+        //     pub(crate) spent_height: Option<i64>,
+
+        //     pub(crate) confirmed_txid: Option<String>,
+        //     pub(crate) spent_txid: Option<String>,
+        // }
+        // let digest = Tip5::hash(&recovery_data.utxo);
+        // let db_data = UtxoDbData {
+        // id: 0,
+        // hash: digest.to_hex(),
+        // recovery_data,
+        // spent_in_block: None,
+        // confirmed_in_block: UtxoBlockInfo {
+        // block_height: height,
+        // block_digest: block.hash,
+        // timestamp: block.kernel.header.timestamp,
+        // },
+        // spent_height: None,
+        // confirm_height: height.try_into()?,
+        // confirmed_txid: None,
+        // spent_txid: None,
+        // };
+
+        Ok(NativeCurrencyAmount::zero())
     }
 
     pub(crate) async fn update_new_tip(
@@ -463,6 +573,17 @@ impl WalletState {
             })
             .collect_vec();
         Ok(incommings)
+    }
+}
+
+impl From<IncomingUtxoRecoveryData> for UtxoRecoveryData {
+    fn from(value: IncomingUtxoRecoveryData) -> Self {
+        Self {
+            utxo: value.utxo,
+            sender_randomness: value.sender_randomness,
+            receiver_preimage: value.receiver_preimage,
+            aocl_index: value.aocl_index,
+        }
     }
 }
 

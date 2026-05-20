@@ -204,6 +204,22 @@ impl NodeRpcClient {
 
         Ok(res)
     }
+
+    pub(crate) async fn are_bloom_indices_set(
+        &self,
+        index_sets: Vec<AbsoluteIndexSet>,
+    ) -> Result<Vec<bool>> {
+        let client = self.rest_server();
+
+        // TODO: Use batch-version of endpoint instead!
+        let mut are_set = vec![];
+        for index_set in index_sets {
+            let resp = client.are_bloom_indices_set(index_set).await?;
+            are_set.push(resp.are_set);
+        }
+
+        Ok(are_set)
+    }
 }
 
 #[derive(Error, Debug)]

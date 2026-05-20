@@ -12,6 +12,7 @@ use neptune_cash::api::export::Timestamp;
 use neptune_cash::protocol::consensus::block::Block;
 use neptune_cash::state::wallet::expected_utxo::ExpectedUtxo;
 use neptune_cash::state::wallet::expected_utxo::UtxoNotifier;
+use neptune_cash::state::wallet::wallet_state::IncomingUtxoRecoveryData;
 use serde::Serialize;
 use tokio::select;
 use tokio::sync::Mutex;
@@ -160,6 +161,21 @@ impl SyncState {
         });
 
         self.handler.lock().await.replace(task);
+    }
+
+    pub(crate) async fn cancel_sync(&self) {
+        self.cancel.store(1, Ordering::Relaxed);
+        self.waker.notify_waiters();
+
+        if let Some(mut handler) = self.handler.lock().await.take() {
+            match tokio::time::timeout(Duration::from_secs(5), &mut handler).await {
+                Ok(_) => {}
+                Err(_) => {
+                    warn!("cancel timeout after 5s");
+                    handler.abort();
+                }
+            };
+        }
     }
 
     async fn sync_inner(&self) -> Result<()> {
@@ -333,19 +349,12 @@ impl SyncState {
         let _ = crate::service::app::emit_event_to("main", "syncing_new_block", height);
     }
 
-    pub(crate) async fn cancel_sync(&self) {
-        self.cancel.store(1, Ordering::Relaxed);
-        self.waker.notify_waiters();
-
-        if let Some(mut handler) = self.handler.lock().await.take() {
-            match tokio::time::timeout(Duration::from_secs(5), &mut handler).await {
-                Ok(_) => {}
-                Err(_) => {
-                    warn!("cancel timeout after 5s");
-                    handler.abort();
-                }
-            };
-        }
+    #[cfg(test)]
+    pub(crate) fn check_premine_for_tests(
+        network: Network,
+        premine_keys: &[SpendingKey],
+    ) -> Vec<ExpectedUtxoData> {
+        Self::check_premine_inner(network, premine_keys)
     }
 
     /// Return premine UTXOs, if genesis block hasn't already been checked.
@@ -360,14 +369,6 @@ impl SyncState {
         };
 
         Ok(utxos)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn check_premine_for_tests(
-        network: Network,
-        premine_keys: &[SpendingKey],
-    ) -> Vec<ExpectedUtxoData> {
-        Self::check_premine_inner(network, premine_keys)
     }
 
     fn check_premine_inner(

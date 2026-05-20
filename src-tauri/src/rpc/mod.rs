@@ -25,6 +25,7 @@ use neptune_cash::api::export::NativeCurrencyAmount;
 use neptune_cash::api::export::ReceivingAddress;
 use neptune_cash::api::export::Timestamp;
 use neptune_cash::state::wallet::utxo_notification::UtxoNotificationMedium;
+use neptune_cash::state::wallet::wallet_state::IncomingUtxoRecoveryData;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
 use serde::Serialize;
@@ -161,6 +162,21 @@ pub(crate) trait WalletRpc {
             .collect::<Vec<_>>();
         Ok(utxos)
     }
+
+    async fn import_incoming_randomness(
+        payload: Vec<IncomingUtxoRecoveryData>,
+    ) -> Result<String, RestError> {
+        let wallet = &get_state::<Arc<SyncState>>().wallet;
+
+        let recovered = wallet
+            .import_randomness(payload)
+            .await
+            .map_err(|e| RestError(e.to_string()))?
+            .display_lossless();
+
+        Ok(recovered)
+    }
+
     async fn send_to_address(params: SendToAddressParams) -> Result<SendResponse, RestError> {
         trace!(
             "Sending to address: Accept lustrations: {}",
