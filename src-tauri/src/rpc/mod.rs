@@ -174,6 +174,8 @@ pub(crate) trait WalletRpc {
             .map_err(|e| RestError(e.to_string()))?
             .display_lossless();
 
+        info!("Recovered: {recovered} NPT through imported randomness");
+
         Ok(recovered)
     }
 

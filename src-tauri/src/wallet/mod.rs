@@ -6,6 +6,7 @@ use std::range::Range;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
+use anyhow::bail;
 use anyhow::Context;
 use anyhow::Result;
 use itertools::Itertools;
@@ -222,7 +223,7 @@ impl WalletState {
             .collect();
 
         let num_keys_unclaimed = receiver_preimage_to_utxos.len();
-        let receiver_preimage_to_utxos: HashMap<Digest, Vec<_>> = receiver_preimage_to_utxos
+        let mut receiver_preimage_to_utxos: HashMap<Digest, Vec<_>> = receiver_preimage_to_utxos
             .into_iter()
             .filter(|(receiver_preim, _)| all_privacy_preimages.contains(receiver_preim))
             .collect();
@@ -270,111 +271,91 @@ impl WalletState {
         }
 
         // Were the UTXOs *actually* added to the AOCL? If not, then they should not be counted.
+        // Iterate mutably over the values (the Vecs) in the HashMap
+        for utxos in receiver_preimage_to_utxos.values_mut() {
+            // Take ownership of the Vec, leaving an empty Vec in the HashMap temporarily
+            let current_utxos = std::mem::take(utxos);
 
-        // let (msmps_recovery_data, tip_header) = loop {
-        //     trace!("Requesting {} ms membership proofs", index_sets.len());
-        //     let msmps_recovery_data = rpc_client::node_rpc_client()
-        //         .restore_msmps(index_sets.clone())
-        //         .await?;
-        //     trace!(
-        //         "Received {} ms membership proofs",
-        //         msmps_recovery_data.membership_proofs.len()
-        //     );
+            // Create a new Vec to hold the ones that pass the check
+            let mut valid_utxos = Vec::with_capacity(current_utxos.len());
 
-        //     let tip_header = rpc_client::node_rpc_client().get_tip_header().await?;
+            for utxo in current_utxos {
+                let index_set = utxo.abs_i();
 
-        //     if tip_header.height == msmps_recovery_data.tip_height {
-        //         break (msmps_recovery_data, tip_header);
-        //     }
-        // };
+                let msmps_recovery_data = rpc_client::node_rpc_client()
+                    .restore_msmps(vec![index_set])
+                    .await?;
 
-        // let mut unlocked = Vec::with_capacity(utxos.len());
-        // for (recovery_data, utxo) in msmps_recovery_data.membership_proofs.into_iter().zip(utxos) {
-        //     let spending_key = self
-        //         .find_spending_key_for_utxo(&utxo.utxo)
-        //         .context("No spending key found for utxo")?;
+                let membership_proof = match msmps_recovery_data.membership_proofs[0]
+                    .clone()
+                    .extract_ms_membership_proof(
+                        utxo.aocl_index,
+                        utxo.sender_randomness,
+                        utxo.receiver_preimage,
+                    ) {
+                    Ok(msmp) => msmp,
+                    Err(err) => bail!(
+                        "Server returned bad mutator set membership proof recovery data: {}",
+                        err
+                    ),
+                };
 
-        //     let membership_proof = match recovery_data.extract_ms_membership_proof(
-        //         utxo.aocl_index,
-        //         utxo.sender_randomness,
-        //         utxo.receiver_preimage,
-        //     ) {
-        //         Ok(msmp) => msmp,
-        //         Err(err) => bail!(
-        //             "Server returned bad mutator set membership proof recovery data: {}",
-        //             err
-        //         ),
-        //     };
+                let item = Tip5::hash(&utxo.utxo);
+                let valid = msmps_recovery_data
+                    .tip_mutator_set
+                    .verify(item, &membership_proof);
 
-        //     unlocked.push(UnlockedUtxo::unlock(
-        //         utxo.utxo,
-        //         spending_key.lock_script_and_witness(),
-        //         membership_proof,
-        //     ));
-        // }
+                // If valid is true, keep it
+                if valid {
+                    valid_utxos.push(utxo);
+                } else {
+                    error!("Recovery data contains UTXOs that cannot be claimed. Skipping those.")
+                }
+            }
 
-        // let filtered: Vec<_> =
-        // for (key_type, keys) in all_keys {
-        //     for (index, key) in keys {
+            // Put the valid utxos back into the HashMap's value
+            *utxos = valid_utxos;
+        }
 
-        //     }
-        // }
+        // Clean up the HashMap to remove keys that have empty values from above loop.
+        receiver_preimage_to_utxos.retain(|_digest, utxos| !utxos.is_empty());
 
-        // Only recover not-yet-spent UTXOs
-        // Do this by asking server if absolute index sets have been applied
+        let mut new_utxos = vec![];
+        let mut total_recovered = NativeCurrencyAmount::zero();
+        for recovery_data in receiver_preimage_to_utxos.into_values().flatten() {
+            let resp = rpc_client::node_rpc_client()
+            .find_utxo_origin(recovery_data.addition_record())
+            .await?;
 
-        // for not_claimed in not_claimed {
-        // Ask server if
-        // }
+            let Some((block_digest, block_header)) = resp else {
+                error!("Unable to find origin of UTXO from imported randomness");
+                continue;
+            };
 
-        // Goal: Call self.append_utxos(&mut tx, db_datas).await?;
-        // So we must construct db_datas
+            total_recovered += recovery_data.utxo.get_native_currency_amount();
+            let new_utxo = UtxoDbData {
+                id: 0,
+                hash: Tip5::hash(&recovery_data.utxo).to_hex(),
+                recovery_data,
+                spent_in_block: None,
+                confirmed_in_block: UtxoBlockInfo { block_height: block_header.height.into(), block_digest, timestamp: block_header.timestamp },
+                confirm_height: block_header.height.value().try_into()?,
+                spent_height: None,
+                confirmed_txid: None,
+                spent_txid: None,
+            };
 
-        // We already have the cryptographic data -- now we just need to
-        // find the block data: were the UTXO was confirmed.
+            new_utxos.push(new_utxo);
+        }
 
-        // #[derive(Clone, Debug, Serialize, Deserialize)]
-        // pub(crate) struct UtxoRecoveryData {
-        //     pub(crate) utxo: Utxo,
-        //     pub(crate) sender_randomness: Digest,
-        //     pub(crate) receiver_preimage: Digest,
-        //     pub(crate) aocl_index: u64,
-        // }
-        // pub(crate) struct UtxoDbData {
-        //     pub(crate) id: i64,
-        //     pub(crate) hash: String,
-        //     pub(crate) recovery_data: UtxoRecoveryData,
-        //     // hash of the block, if any, in which this UTXO was spent
-        //     pub(crate) spent_in_block: Option<UtxoBlockInfo>,
+        info!("Importing {} new UTXOs to the wallet", new_utxos.len());
 
-        //     // hash of the block, if any, in which this UTXO was confirmed
-        //     pub(crate) confirmed_in_block: UtxoBlockInfo,
+        let mut tx = self.pool.begin().await?;
+        self.append_utxos(&mut tx, new_utxos).await?;
 
-        //     // this two values are used to rollback
-        //     pub(crate) confirm_height: i64,
-        //     pub(crate) spent_height: Option<i64>,
+        tx.commit().await?;
 
-        //     pub(crate) confirmed_txid: Option<String>,
-        //     pub(crate) spent_txid: Option<String>,
-        // }
-        // let digest = Tip5::hash(&recovery_data.utxo);
-        // let db_data = UtxoDbData {
-        // id: 0,
-        // hash: digest.to_hex(),
-        // recovery_data,
-        // spent_in_block: None,
-        // confirmed_in_block: UtxoBlockInfo {
-        // block_height: height,
-        // block_digest: block.hash,
-        // timestamp: block.kernel.header.timestamp,
-        // },
-        // spent_height: None,
-        // confirm_height: height.try_into()?,
-        // confirmed_txid: None,
-        // spent_txid: None,
-        // };
-
-        Ok(NativeCurrencyAmount::zero())
+        Ok(total_recovered)
     }
 
     pub(crate) async fn update_new_tip(
