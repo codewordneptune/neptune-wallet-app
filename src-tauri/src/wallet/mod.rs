@@ -10,6 +10,7 @@ use anyhow::Context;
 use anyhow::Result;
 use itertools::Itertools;
 use neptune_cash::api::export::AdditionRecord;
+use neptune_cash::api::export::KeyType;
 use neptune_cash::api::export::NativeCurrencyAmount;
 use neptune_cash::api::export::Network;
 use neptune_cash::api::export::Timestamp;
@@ -41,7 +42,6 @@ use crate::config::Config;
 use crate::rpc_client;
 use crate::wallet::wallet_block::WalletBlock;
 
-// mod archive_state;
 pub(crate) mod balance;
 pub(crate) mod fake_archival_state;
 pub(crate) mod fork;
@@ -161,21 +161,18 @@ impl WalletState {
 
     pub(crate) async fn import_randomness(
         &self,
-        payload: Vec<IncomingUtxoRecoveryData>,
+        incoming_utxos: Vec<IncomingUtxoRecoveryData>,
     ) -> Result<NativeCurrencyAmount> {
-        // let mut tx = self.pool.begin().await?;
-
         // Only consider not-already-tracked UTXOs
         let mut not_claimed = vec![];
         let already_claimed: HashSet<_> = self
-            // .get_unspent_utxos(&mut tx)
             .get_utxos()
             .await?
             .into_iter()
             .map(|x| x.recovery_data.abs_i())
             .collect();
 
-        for recovery_data in payload {
+        for recovery_data in incoming_utxos {
             let recovery_data: UtxoRecoveryData = recovery_data.into();
             let absi = recovery_data.abs_i();
             if already_claimed.contains(&absi) {
@@ -196,17 +193,132 @@ impl WalletState {
             .are_bloom_indices_set(not_claimed_absis)
             .await?;
 
-        let filtered: Vec<_> = not_claimed
-            .into_iter()
-            .zip_eq(spent)
-            .filter(|&(_, spent)| !spent)
-            .map(|(val, _)| val)
-            .collect();
+        let mut receiver_preimage_to_utxos: HashMap<Digest, Vec<UtxoRecoveryData>> = HashMap::new();
+        for (i, utxo) in not_claimed.into_iter().enumerate() {
+            if spent[i] {
+                continue;
+            }
+
+            let receiver_preimage = utxo.receiver_preimage;
+            match receiver_preimage_to_utxos.get_mut(&receiver_preimage) {
+                Some(utxos) => utxos.push(utxo),
+                None => {
+                    receiver_preimage_to_utxos.insert(receiver_preimage, vec![utxo]);
+                }
+            };
+        }
 
         info!(
             "Found {} not-yet-claimed and not-yet-spent UTXOs in recovery data",
-            filtered.len()
+            receiver_preimage_to_utxos.len()
         );
+
+        // Do we have the keys for these UTXOs?
+        let all_keys = self.known_and_future_keys();
+
+        let all_privacy_preimages: HashSet<Digest> = all_keys
+            .values()
+            .flat_map(|keys| keys.values().map(|key| key.privacy_preimage()))
+            .collect();
+
+        let num_keys_unclaimed = receiver_preimage_to_utxos.len();
+        let receiver_preimage_to_utxos: HashMap<Digest, Vec<_>> = receiver_preimage_to_utxos
+            .into_iter()
+            .filter(|(receiver_preim, _)| all_privacy_preimages.contains(receiver_preim))
+            .collect();
+        if receiver_preimage_to_utxos.len() != num_keys_unclaimed {
+            error!("Incoming UTXO recovery data contains data for which no keys are known.");
+        }
+
+        info!(
+            "Found {} not-yet-claimed and not-yet-spent UTXOs with known keys in recovery data",
+            receiver_preimage_to_utxos.len()
+        );
+
+        // Bump key counter to highest matching key counter, for each key type.
+        for (key_type, keys) in &all_keys {
+            let mut max_key_index = None;
+
+            for (key_index, key) in keys {
+                // if receiver_preimage_to_utxos
+                if receiver_preimage_to_utxos.contains_key(&key.privacy_preimage())
+                    && max_key_index.is_none_or(|max_seen| max_seen < key_index)
+                {
+                    max_key_index = Some(key_index);
+                }
+            }
+
+            if let Some(max_key_index) = max_key_index {
+                match key_type {
+                    KeyType::Generation => {
+                        self.generation_key_index
+                            .fetch_max(*max_key_index, Ordering::SeqCst);
+                    }
+                    KeyType::Symmetric => {
+                        self.symmetric_key_index
+                            .fetch_max(*max_key_index, Ordering::SeqCst);
+                    }
+                    _ => todo!(),
+                }
+
+                // TODO:
+                // Did we just bump index and miss UTXOs bc of missing keys? If so, call function
+                // recursively!! Since there might be more UTXOs we have to scan. Only do the
+                // filtering out-for-spent status *after* this has been done since spent UTXOs might
+                // have increased the key-counter values in external wallets (e.g. in neptune-core).
+            }
+        }
+
+        // Were the UTXOs *actually* added to the AOCL? If not, then they should not be counted.
+
+        // let (msmps_recovery_data, tip_header) = loop {
+        //     trace!("Requesting {} ms membership proofs", index_sets.len());
+        //     let msmps_recovery_data = rpc_client::node_rpc_client()
+        //         .restore_msmps(index_sets.clone())
+        //         .await?;
+        //     trace!(
+        //         "Received {} ms membership proofs",
+        //         msmps_recovery_data.membership_proofs.len()
+        //     );
+
+        //     let tip_header = rpc_client::node_rpc_client().get_tip_header().await?;
+
+        //     if tip_header.height == msmps_recovery_data.tip_height {
+        //         break (msmps_recovery_data, tip_header);
+        //     }
+        // };
+
+        // let mut unlocked = Vec::with_capacity(utxos.len());
+        // for (recovery_data, utxo) in msmps_recovery_data.membership_proofs.into_iter().zip(utxos) {
+        //     let spending_key = self
+        //         .find_spending_key_for_utxo(&utxo.utxo)
+        //         .context("No spending key found for utxo")?;
+
+        //     let membership_proof = match recovery_data.extract_ms_membership_proof(
+        //         utxo.aocl_index,
+        //         utxo.sender_randomness,
+        //         utxo.receiver_preimage,
+        //     ) {
+        //         Ok(msmp) => msmp,
+        //         Err(err) => bail!(
+        //             "Server returned bad mutator set membership proof recovery data: {}",
+        //             err
+        //         ),
+        //     };
+
+        //     unlocked.push(UnlockedUtxo::unlock(
+        //         utxo.utxo,
+        //         spending_key.lock_script_and_witness(),
+        //         membership_proof,
+        //     ));
+        // }
+
+        // let filtered: Vec<_> =
+        // for (key_type, keys) in all_keys {
+        //     for (index, key) in keys {
+
+        //     }
+        // }
 
         // Only recover not-yet-spent UTXOs
         // Do this by asking server if absolute index sets have been applied
@@ -429,7 +541,7 @@ impl WalletState {
 
         let all_addition_records: HashSet<_> = block.all_addition_records().into_iter().collect();
 
-        let spendingkeys = self.get_future_generation_spending_keys(Range {
+        let spendingkeys = self.generation_keys(Range {
             start: 0,
             end: self.generation_key_index() + self.num_future_keys(),
         });
@@ -446,7 +558,7 @@ impl WalletState {
             utxo
         });
 
-        let symmetric_keys = self.get_future_symmetric_keys(Range {
+        let symmetric_keys = self.symmetric_keys(Range {
             start: 0,
             end: self.symmetric_key_index() + self.num_future_keys(),
         });
@@ -649,11 +761,11 @@ mod tests {
             let last_gen_key = self.generation_key_index() + self.scan_config.num_keys;
             let last_sym_key = self.symmetric_key_index() + self.scan_config.num_keys;
 
-            let mut keys = self.get_future_generation_spending_keys(Range {
+            let mut keys = self.generation_keys(Range {
                 start: 0,
                 end: last_gen_key,
             });
-            keys.extend(self.get_future_symmetric_keys(Range {
+            keys.extend(self.symmetric_keys(Range {
                 start: 0,
                 end: last_sym_key,
             }));

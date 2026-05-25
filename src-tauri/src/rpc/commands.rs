@@ -177,16 +177,9 @@ pub(crate) async fn get_tip_height() -> Result<u64> {
 pub(crate) async fn import_incoming_randomness(
     payload: Vec<IncomingUtxoRecoveryData>,
 ) -> Result<String> {
-    // WalletRpcImpl::get_tip_height().await.into_tauri_result()
-    // println!("Received {} items for processing.", payload.len());
     info!("Received {} incoming UTXOs for processing.", payload.len());
-
-    // TODO: Add your actual backend processing logic here
 
     WalletRpcImpl::import_incoming_randomness(payload)
         .await
         .into_tauri_result()
-
-    // Return Ok to indicate success, or Err(String) if something fails
-    // Ok("missing function body".to_owned())
 }
