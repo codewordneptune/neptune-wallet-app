@@ -165,7 +165,11 @@ impl WalletState {
         &self,
         incoming_utxos: Vec<IncomingUtxoRecoveryData>,
     ) -> Result<NativeCurrencyAmount> {
-        // First, bump key indices to ensure wallet tracks enough keys
+        // Deduplicate recovery data, such that repeated entries don't lead to
+        // wrong balances.
+        let incoming_utxos = Self::deduplicate_recovery_data(incoming_utxos);
+
+        // Bump key indices to ensure wallet tracks enough keys
         let key_indices = self.max_key_index_used(&incoming_utxos);
         for (key_type, max_index) in key_indices {
             let max_index = max_index.unwrap_or(0);
@@ -207,80 +211,56 @@ impl WalletState {
             .are_bloom_indices_set(not_claimed_absis)
             .await?;
 
-        let mut receiver_preimage_to_utxos: HashMap<Digest, Vec<UtxoRecoveryData>> = HashMap::new();
-        for (i, utxo) in incoming_utxos.into_iter().enumerate() {
-            if spent[i] {
-                continue;
-            }
-
-            let receiver_preimage = utxo.receiver_preimage;
-            match receiver_preimage_to_utxos.get_mut(&receiver_preimage) {
-                Some(utxos) => utxos.push(utxo),
-                None => {
-                    receiver_preimage_to_utxos.insert(receiver_preimage, vec![utxo]);
-                }
-            };
-        }
+        let incoming_utxos: Vec<_> = incoming_utxos
+            .into_iter()
+            .zip_eq(spent)
+            .filter(|(_utxo, spent)| !spent)
+            .map(|(utxo, _spent)| utxo)
+            .collect();
         info!(
             "Found {} not-yet-claimed and unspent UTXOs",
-            receiver_preimage_to_utxos
-                .values()
-                .map(|x| x.len())
-                .sum::<usize>()
+            incoming_utxos.len()
         );
 
         // Only import UTXOs that were actually added to the AOCL
-        for utxos in receiver_preimage_to_utxos.values_mut() {
-            // Take ownership of the Vec, leaving an empty Vec in the HashMap temporarily
-            let current_utxos = std::mem::take(utxos);
+        let mut confirmed_valid = vec![];
+        for incoming in incoming_utxos {
+            let index_set = incoming.abs_i();
 
-            // Create a new Vec to hold the ones that pass the check
-            let mut valid_utxos = Vec::with_capacity(current_utxos.len());
+            let msmps_recovery_data = rpc_client::node_rpc_client()
+                .restore_msmps(vec![index_set])
+                .await?;
 
-            for utxo in current_utxos {
-                let index_set = utxo.abs_i();
+            let membership_proof = match msmps_recovery_data.membership_proofs[0]
+                .clone()
+                .extract_ms_membership_proof(
+                    incoming.aocl_index,
+                    incoming.sender_randomness,
+                    incoming.receiver_preimage,
+                ) {
+                Ok(msmp) => msmp,
+                Err(err) => bail!(
+                    "Server returned bad mutator set membership proof recovery data: {}",
+                    err
+                ),
+            };
 
-                let msmps_recovery_data = rpc_client::node_rpc_client()
-                    .restore_msmps(vec![index_set])
-                    .await?;
+            let item = Tip5::hash(&incoming.utxo);
+            let valid = msmps_recovery_data
+                .tip_mutator_set
+                .verify(item, &membership_proof);
 
-                let membership_proof = match msmps_recovery_data.membership_proofs[0]
-                    .clone()
-                    .extract_ms_membership_proof(
-                        utxo.aocl_index,
-                        utxo.sender_randomness,
-                        utxo.receiver_preimage,
-                    ) {
-                    Ok(msmp) => msmp,
-                    Err(err) => bail!(
-                        "Server returned bad mutator set membership proof recovery data: {}",
-                        err
-                    ),
-                };
-
-                let item = Tip5::hash(&utxo.utxo);
-                let valid = msmps_recovery_data
-                    .tip_mutator_set
-                    .verify(item, &membership_proof);
-
-                // If valid is true, keep it
-                if valid {
-                    valid_utxos.push(utxo);
-                } else {
-                    error!("Recovery data contains UTXOs that cannot be claimed. Skipping those.")
-                }
+            // If valid keep it
+            if valid {
+                confirmed_valid.push(incoming);
+            } else {
+                error!("Recovery data contains UTXOs that cannot be claimed. Skipping those.")
             }
-
-            // Put the valid utxos back into the HashMap's value
-            *utxos = valid_utxos;
         }
-
-        // Clean up the HashMap to remove keys that have empty values from above loop.
-        receiver_preimage_to_utxos.retain(|_digest, utxos| !utxos.is_empty());
 
         let mut new_utxos = vec![];
         let mut total_recovered = NativeCurrencyAmount::zero();
-        for recovery_data in receiver_preimage_to_utxos.into_values().flatten() {
+        for recovery_data in confirmed_valid {
             let resp = rpc_client::node_rpc_client()
                 .find_utxo_origin(recovery_data.addition_record())
                 .await?;

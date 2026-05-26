@@ -9,6 +9,22 @@ use std::range::Range;
 use crate::wallet::UtxoRecoveryData;
 
 impl super::WalletState {
+    pub(super) fn deduplicate_recovery_data(
+        incoming_utxos: Vec<IncomingUtxoRecoveryData>,
+    ) -> Vec<IncomingUtxoRecoveryData> {
+        let mut seen_absis = HashSet::new();
+        let mut ret = vec![];
+
+        for incoming in incoming_utxos {
+            let urd: UtxoRecoveryData = incoming.clone().into();
+            if seen_absis.insert(urd.abs_i()) {
+                ret.push(incoming);
+            }
+        }
+
+        ret
+    }
+
     /// Return the highest key index that has received an incoming UTXO for each
     /// key type.
     ///
@@ -131,6 +147,14 @@ mod tests {
         let incoming_utxos = load_incoming_randomness("devnet_incoming_randomness_block38434.dat");
 
         (incoming_utxos, wallet)
+    }
+
+    #[tokio::test]
+    async fn deduplicate_devnet() {
+        let (incoming_utxos, _) = setup().await;
+        let expected = incoming_utxos.clone();
+        let result = WalletState::deduplicate_recovery_data(incoming_utxos);
+        assert_eq!(expected, result);
     }
 
     #[tokio::test]
