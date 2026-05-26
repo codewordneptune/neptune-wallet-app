@@ -1,4 +1,6 @@
 use anyhow::Result;
+use itertools::Itertools;
+use neptune_cash::api::export::AbsoluteIndexSet;
 use neptune_cash::api::export::Digest;
 use neptune_cash::api::export::KeyType;
 use neptune_cash::state::wallet::wallet_state::IncomingUtxoRecoveryData;
@@ -114,6 +116,29 @@ impl super::WalletState {
             .filter(|incoming| all_privacy_preimages.contains(&incoming.receiver_preimage))
             .collect()
     }
+
+    /// Only return those UTXOs that are not spent.
+    pub(super) async fn filter_unspent_utxos<F, Fut>(
+        utxos: Vec<UtxoRecoveryData>,
+        rpc_call: F,
+    ) -> Result<Vec<UtxoRecoveryData>>
+    where
+        F: FnOnce(Vec<AbsoluteIndexSet>) -> Fut,
+        Fut: std::future::Future<Output = Result<Vec<bool>>>,
+    {
+        let absis: Vec<_> = utxos.iter().map(|x| x.abs_i()).collect();
+
+        let spent_flags = rpc_call(absis).await?;
+
+        let unspent_utxos: Vec<_> = utxos
+            .into_iter()
+            .zip_eq(spent_flags)
+            .filter(|(_utxo, is_spent)| !*is_spent)
+            .map(|(utxo, _is_spent)| utxo)
+            .collect();
+
+        Ok(unspent_utxos)
+    }
 }
 
 #[cfg(test)]
@@ -186,4 +211,31 @@ mod tests {
         let result = wallet.have_matching_keys(incoming_utxos);
         assert_eq!(expected, result);
     }
+
+    // #[tokio::test]
+    // async fn test_filter_unspent_utxos_maintains_ordering() {
+    //     // 1. Setup mock data (assume `mock_utxo` is a helper to create test instances)
+    //     let utxo1 = mock_utxo(1); // Unspent
+    //     let utxo2 = mock_utxo(2); // Spent
+    //     let utxo3 = mock_utxo(3); // Unspent
+    //     let utxos = vec![utxo1.clone(), utxo2.clone(), utxo3.clone()];
+
+    //     // 2. Call the function with a mock RPC closure
+    //     let result = WalletState::filter_unspent_utxos(utxos, |absis| async move {
+    //         // Verify the indices were passed in the exact expected order
+    //         assert_eq!(absis[0], utxo1.abs_i());
+    //         assert_eq!(absis[1], utxo2.abs_i());
+    //         assert_eq!(absis[2], utxo3.abs_i());
+
+    //         // Mock the RPC response returning the spent status
+    //         Ok(vec![false, true, false])
+    //     })
+    //     .await
+    //     .expect("Filtering failed");
+
+    //     // 3. Assert the result
+    //     assert_eq!(result.len(), 2);
+    //     assert_eq!(result[0].abs_i(), utxo1.abs_i());
+    //     assert_eq!(result[1].abs_i(), utxo3.abs_i());
+    // }
 }

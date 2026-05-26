@@ -208,17 +208,12 @@ impl WalletState {
         }
 
         // Only import not-yet-spent UTXOs
-        let not_claimed_absis: Vec<_> = incoming_utxos.iter().map(|x| x.abs_i()).collect();
-        let spent = rpc_client::node_rpc_client()
-            .are_bloom_indices_set(not_claimed_absis)
-            .await?;
-
-        let incoming_utxos: Vec<_> = incoming_utxos
-            .into_iter()
-            .zip_eq(spent)
-            .filter(|(_utxo, spent)| !spent)
-            .map(|(utxo, _spent)| utxo)
-            .collect();
+        let incoming_utxos = Self::filter_unspent_utxos(incoming_utxos, |absis| async move {
+            rpc_client::node_rpc_client()
+                .are_bloom_indices_set(absis)
+                .await
+        })
+        .await?;
         let value = incoming_utxos
             .iter()
             .map(|x| x.utxo.get_native_currency_amount())
