@@ -7,6 +7,7 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
 use anyhow::bail;
+use anyhow::ensure;
 use anyhow::Context;
 use anyhow::Result;
 use itertools::Itertools;
@@ -167,7 +168,9 @@ impl WalletState {
     ) -> Result<NativeCurrencyAmount> {
         // Deduplicate recovery data, such that repeated entries don't lead to
         // wrong balances.
+        info!("Num UTXOs in incoming randomness: {}", incoming_utxos.len());
         let incoming_utxos = Self::deduplicate_recovery_data(incoming_utxos);
+        info!("After deduplication: {}", incoming_utxos.len());
 
         // Bump key indices to ensure wallet tracks enough keys
         let key_indices = self.max_key_index_used(&incoming_utxos);
@@ -205,8 +208,7 @@ impl WalletState {
         }
 
         // Only import not-yet-spent UTXOs
-        let not_claimed_absis: HashSet<_> = incoming_utxos.iter().map(|x| x.abs_i()).collect();
-        let not_claimed_absis: Vec<_> = not_claimed_absis.into_iter().collect();
+        let not_claimed_absis: Vec<_> = incoming_utxos.iter().map(|x| x.abs_i()).collect();
         let spent = rpc_client::node_rpc_client()
             .are_bloom_indices_set(not_claimed_absis)
             .await?;
@@ -217,8 +219,12 @@ impl WalletState {
             .filter(|(_utxo, spent)| !spent)
             .map(|(utxo, _spent)| utxo)
             .collect();
+        let value = incoming_utxos
+            .iter()
+            .map(|x| x.utxo.get_native_currency_amount())
+            .fold(NativeCurrencyAmount::zero(), |acc, x| acc + x);
         info!(
-            "Found {} not-yet-claimed and unspent UTXOs",
+            "Found {} not-yet-claimed and unspent UTXOs for a value of {value} NPT.",
             incoming_utxos.len()
         );
 
@@ -230,6 +236,10 @@ impl WalletState {
             let msmps_recovery_data = rpc_client::node_rpc_client()
                 .restore_msmps(vec![index_set])
                 .await?;
+            ensure!(
+                1 == msmps_recovery_data.membership_proofs.len(),
+                "Expected only 1 MSMP to be returned by the server."
+            );
 
             let membership_proof = match msmps_recovery_data.membership_proofs[0]
                 .clone()
@@ -254,9 +264,11 @@ impl WalletState {
             if valid {
                 confirmed_valid.push(incoming);
             } else {
-                error!("Recovery data contains UTXOs that cannot be claimed. Skipping those.")
+                error!("Recovery data contains UTXOs that cannot be claimed. Skipping those. AOCL index: {}", incoming.aocl_index);
             }
         }
+
+        info!("Importing {} confirmed valid UTXOs", confirmed_valid.len());
 
         let mut new_utxos = vec![];
         let mut total_recovered = NativeCurrencyAmount::zero();

@@ -21,6 +21,7 @@ use once_cell::sync::Lazy;
 use thiserror::Error;
 use tracing::debug;
 use tracing::error;
+use tracing::trace;
 
 use crate::wallet::wallet_block::WalletBlock;
 
@@ -242,12 +243,18 @@ impl NodeRpcClient {
         &self,
         index_sets: Vec<AbsoluteIndexSet>,
     ) -> Result<Vec<bool>> {
+        debug!(
+            "request: are_bloom_indices_set of {} index sets",
+            index_sets.len()
+        );
         let client = self.rest_server();
 
         // TODO: Use batch-version of endpoint instead!
         let mut are_set = vec![];
         for index_set in index_sets {
             let resp = client.are_bloom_indices_set(index_set).await?;
+
+            trace!("are set: {}", resp.are_set);
             are_set.push(resp.are_set);
         }
 
