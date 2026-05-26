@@ -1,9 +1,13 @@
 use std::env;
 use std::fs;
+use std::fs::File;
+use std::io::BufRead;
+use std::io::BufReader;
 use std::path::Path;
 use std::path::PathBuf;
 
 use neptune_cash::application::json_rpc::core::model::wallet::block::RpcWalletBlock;
+use neptune_cash::state::wallet::wallet_state::IncomingUtxoRecoveryData;
 use rand::distr::Alphanumeric;
 use rand::distr::SampleString;
 
@@ -49,4 +53,35 @@ pub(crate) fn wallet_block_from_test_data(block_height: u64) -> Option<WalletBlo
     let rpc_block: RpcWalletBlock = bincode::deserialize(&file_bytes).ok()?;
 
     Some(rpc_block.into())
+}
+
+pub(crate) fn load_incoming_randomness(file_name: &str) -> Vec<IncomingUtxoRecoveryData> {
+    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    path.push("test_data");
+    path.push(file_name);
+
+    let file =
+        File::open(&path).unwrap_or_else(|_| panic!("Failed to open test data file at {:?}", path));
+    let reader = BufReader::new(file);
+
+    let mut incoming_utxos: Vec<IncomingUtxoRecoveryData> = Vec::new();
+    for (line_number, line) in reader.lines().enumerate() {
+        let line = line.expect("Failed to read line from test data");
+
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let utxo: IncomingUtxoRecoveryData = serde_json::from_str(&line).unwrap_or_else(|e| {
+            panic!(
+                "Failed to deserialize JSON at line {}: {}",
+                line_number + 1,
+                e
+            )
+        });
+
+        incoming_utxos.push(utxo);
+    }
+
+    incoming_utxos
 }

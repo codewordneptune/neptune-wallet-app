@@ -4,14 +4,12 @@ use std::sync::atomic::Ordering;
 
 use anyhow::ensure;
 use anyhow::Result;
-use itertools::Itertools;
 use neptune_cash::api::export::AdditionRecord;
 use neptune_cash::api::export::BlockHeight;
 use neptune_cash::api::export::Digest;
 use neptune_cash::api::export::Transaction;
 use neptune_cash::application::json_rpc::core::api::rpc::RpcApi;
 use neptune_cash::application::json_rpc::core::api::rpc::RpcError;
-use neptune_cash::application::json_rpc::core::model::block::transaction_kernel::RpcAdditionRecord;
 use neptune_cash::application::json_rpc::core::model::wallet::transaction::RpcTransaction;
 use neptune_cash::protocol::consensus::block::block_header::BlockHeader;
 use neptune_cash::protocol::consensus::block::block_selector::BlockSelector;
@@ -117,18 +115,30 @@ impl NodeRpcClient {
         Ok(is_canonical)
     }
 
-    pub(crate) async fn find_utxo_origin(&self, addition_records: AdditionRecord) -> Result<Option<(Digest, BlockHeader)>> {
-        debug!("request: find_utxo_origin, {}", addition_records.canonical_commitment.to_hex());
+    pub(crate) async fn find_utxo_origin(
+        &self,
+        addition_records: AdditionRecord,
+    ) -> Result<Option<(Digest, BlockHeader)>> {
+        debug!(
+            "request: find_utxo_origin, {}",
+            addition_records.canonical_commitment.to_hex()
+        );
         let client = self.rest_server();
 
         // Assume server manages a UTXO index, such that all block heights can be found
-        let block_digest = client.find_utxo_origin(addition_records.into(), None).await?.block;
+        let block_digest = client
+            .find_utxo_origin(addition_records.into(), None)
+            .await?
+            .block;
 
         let Some(block_digest) = block_digest else {
             return Ok(None);
         };
 
-        let block_header = client.get_block_header(BlockSelector::Digest(block_digest)).await?.header;
+        let block_header = client
+            .get_block_header(BlockSelector::Digest(block_digest))
+            .await?
+            .header;
 
         let Some(block_header) = block_header else {
             return Ok(None);

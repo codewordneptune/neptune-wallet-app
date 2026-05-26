@@ -46,6 +46,7 @@ use crate::wallet::wallet_block::WalletBlock;
 pub(crate) mod balance;
 pub(crate) mod fake_archival_state;
 pub(crate) mod fork;
+pub(crate) mod incoming_randomness;
 mod input;
 pub(crate) mod wallet_block;
 pub(crate) use input::InputSelectionRule;
@@ -164,38 +165,50 @@ impl WalletState {
         &self,
         incoming_utxos: Vec<IncomingUtxoRecoveryData>,
     ) -> Result<NativeCurrencyAmount> {
-        // Only consider not-already-tracked UTXOs
-        let mut not_claimed = vec![];
-        let already_claimed: HashSet<_> = self
-            .get_utxos()
-            .await?
-            .into_iter()
-            .map(|x| x.recovery_data.abs_i())
-            .collect();
-
-        for recovery_data in incoming_utxos {
-            let recovery_data: UtxoRecoveryData = recovery_data.into();
-            let absi = recovery_data.abs_i();
-            if already_claimed.contains(&absi) {
-                continue;
+        // First, bump key indices to ensure wallet tracks enough keys
+        let key_indices = self.max_key_index_used(&incoming_utxos);
+        for (key_type, max_index) in key_indices {
+            let max_index = max_index.unwrap_or(0);
+            match key_type {
+                KeyType::Generation => {
+                    self.generation_key_index
+                        .fetch_max(max_index, Ordering::SeqCst);
+                }
+                KeyType::Symmetric => {
+                    self.symmetric_key_index
+                        .fetch_max(max_index, Ordering::SeqCst);
+                }
+                _ => todo!(),
             }
-
-            not_claimed.push(recovery_data);
         }
 
+        // Only consider not-yet-claimed UTXOs
+        let incoming_utxos = self.not_yet_claimed(incoming_utxos).await?;
         info!(
             "Found {} not-yet-claimed UTXOs in recovery data",
-            not_claimed.len()
+            incoming_utxos.len()
         );
 
-        let not_claimed_absis: HashSet<_> = not_claimed.iter().map(|x| x.abs_i()).collect();
+        // Only import UTXOs that this wallet has keys for
+        let num_utxos_unclaimed = incoming_utxos.len();
+        let incoming_utxos = self.have_matching_keys(incoming_utxos);
+        info!(
+            "Found {} not-yet-claimed UTXOs with known keys",
+            incoming_utxos.len()
+        );
+        if incoming_utxos.len() != num_utxos_unclaimed {
+            error!("Incoming UTXO recovery data contains data for which no keys are known.");
+        }
+
+        // Only import not-yet-spent UTXOs
+        let not_claimed_absis: HashSet<_> = incoming_utxos.iter().map(|x| x.abs_i()).collect();
         let not_claimed_absis: Vec<_> = not_claimed_absis.into_iter().collect();
         let spent = rpc_client::node_rpc_client()
             .are_bloom_indices_set(not_claimed_absis)
             .await?;
 
         let mut receiver_preimage_to_utxos: HashMap<Digest, Vec<UtxoRecoveryData>> = HashMap::new();
-        for (i, utxo) in not_claimed.into_iter().enumerate() {
+        for (i, utxo) in incoming_utxos.into_iter().enumerate() {
             if spent[i] {
                 continue;
             }
@@ -208,70 +221,15 @@ impl WalletState {
                 }
             };
         }
-
         info!(
-            "Found {} not-yet-claimed and not-yet-spent UTXOs in recovery data",
-            receiver_preimage_to_utxos.len()
+            "Found {} not-yet-claimed and unspent UTXOs",
+            receiver_preimage_to_utxos
+                .values()
+                .map(|x| x.len())
+                .sum::<usize>()
         );
 
-        // Do we have the keys for these UTXOs?
-        let all_keys = self.known_and_future_keys();
-
-        let all_privacy_preimages: HashSet<Digest> = all_keys
-            .values()
-            .flat_map(|keys| keys.values().map(|key| key.privacy_preimage()))
-            .collect();
-
-        let num_keys_unclaimed = receiver_preimage_to_utxos.len();
-        let mut receiver_preimage_to_utxos: HashMap<Digest, Vec<_>> = receiver_preimage_to_utxos
-            .into_iter()
-            .filter(|(receiver_preim, _)| all_privacy_preimages.contains(receiver_preim))
-            .collect();
-        if receiver_preimage_to_utxos.len() != num_keys_unclaimed {
-            error!("Incoming UTXO recovery data contains data for which no keys are known.");
-        }
-
-        info!(
-            "Found {} not-yet-claimed and not-yet-spent UTXOs with known keys in recovery data",
-            receiver_preimage_to_utxos.len()
-        );
-
-        // Bump key counter to highest matching key counter, for each key type.
-        for (key_type, keys) in &all_keys {
-            let mut max_key_index = None;
-
-            for (key_index, key) in keys {
-                // if receiver_preimage_to_utxos
-                if receiver_preimage_to_utxos.contains_key(&key.privacy_preimage())
-                    && max_key_index.is_none_or(|max_seen| max_seen < key_index)
-                {
-                    max_key_index = Some(key_index);
-                }
-            }
-
-            if let Some(max_key_index) = max_key_index {
-                match key_type {
-                    KeyType::Generation => {
-                        self.generation_key_index
-                            .fetch_max(*max_key_index, Ordering::SeqCst);
-                    }
-                    KeyType::Symmetric => {
-                        self.symmetric_key_index
-                            .fetch_max(*max_key_index, Ordering::SeqCst);
-                    }
-                    _ => todo!(),
-                }
-
-                // TODO:
-                // Did we just bump index and miss UTXOs bc of missing keys? If so, call function
-                // recursively!! Since there might be more UTXOs we have to scan. Only do the
-                // filtering out-for-spent status *after* this has been done since spent UTXOs might
-                // have increased the key-counter values in external wallets (e.g. in neptune-core).
-            }
-        }
-
-        // Were the UTXOs *actually* added to the AOCL? If not, then they should not be counted.
-        // Iterate mutably over the values (the Vecs) in the HashMap
+        // Only import UTXOs that were actually added to the AOCL
         for utxos in receiver_preimage_to_utxos.values_mut() {
             // Take ownership of the Vec, leaving an empty Vec in the HashMap temporarily
             let current_utxos = std::mem::take(utxos);
@@ -324,8 +282,8 @@ impl WalletState {
         let mut total_recovered = NativeCurrencyAmount::zero();
         for recovery_data in receiver_preimage_to_utxos.into_values().flatten() {
             let resp = rpc_client::node_rpc_client()
-            .find_utxo_origin(recovery_data.addition_record())
-            .await?;
+                .find_utxo_origin(recovery_data.addition_record())
+                .await?;
 
             let Some((block_digest, block_header)) = resp else {
                 error!("Unable to find origin of UTXO from imported randomness");
@@ -338,7 +296,11 @@ impl WalletState {
                 hash: Tip5::hash(&recovery_data.utxo).to_hex(),
                 recovery_data,
                 spent_in_block: None,
-                confirmed_in_block: UtxoBlockInfo { block_height: block_header.height.into(), block_digest, timestamp: block_header.timestamp },
+                confirmed_in_block: UtxoBlockInfo {
+                    block_height: block_header.height.into(),
+                    block_digest,
+                    timestamp: block_header.timestamp,
+                },
                 confirm_height: block_header.height.value().try_into()?,
                 spent_height: None,
                 confirmed_txid: None,
@@ -680,7 +642,7 @@ impl From<IncomingUtxoRecoveryData> for UtxoRecoveryData {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) struct UtxoRecoveryData {
     pub(crate) utxo: Utxo,
     pub(crate) sender_randomness: Digest,

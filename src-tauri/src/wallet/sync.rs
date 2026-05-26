@@ -12,7 +12,6 @@ use neptune_cash::api::export::Timestamp;
 use neptune_cash::protocol::consensus::block::Block;
 use neptune_cash::state::wallet::expected_utxo::ExpectedUtxo;
 use neptune_cash::state::wallet::expected_utxo::UtxoNotifier;
-use neptune_cash::state::wallet::wallet_state::IncomingUtxoRecoveryData;
 use serde::Serialize;
 use tokio::select;
 use tokio::sync::Mutex;
