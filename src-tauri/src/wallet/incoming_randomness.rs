@@ -212,30 +212,32 @@ mod tests {
         assert_eq!(expected, result);
     }
 
-    // #[tokio::test]
-    // async fn test_filter_unspent_utxos_maintains_ordering() {
-    //     // 1. Setup mock data (assume `mock_utxo` is a helper to create test instances)
-    //     let utxo1 = mock_utxo(1); // Unspent
-    //     let utxo2 = mock_utxo(2); // Spent
-    //     let utxo3 = mock_utxo(3); // Unspent
-    //     let utxos = vec![utxo1.clone(), utxo2.clone(), utxo3.clone()];
+    #[tokio::test]
+    async fn filter_unspents() {
+        let (incoming_utxos, _) = setup().await;
+        let incoming_utxos: Vec<UtxoRecoveryData> =
+            incoming_utxos.into_iter().map(|x| x.into()).collect();
 
-    //     // 2. Call the function with a mock RPC closure
-    //     let result = WalletState::filter_unspent_utxos(utxos, |absis| async move {
-    //         // Verify the indices were passed in the exact expected order
-    //         assert_eq!(absis[0], utxo1.abs_i());
-    //         assert_eq!(absis[1], utxo2.abs_i());
-    //         assert_eq!(absis[2], utxo3.abs_i());
+        // Mock spent status to what it was at block height 38,434
+        let mut mock_spent_status = vec![true; 30];
+        mock_spent_status[26] = false;
+        mock_spent_status[28] = false;
+        mock_spent_status[29] = false;
 
-    //         // Mock the RPC response returning the spent status
-    //         Ok(vec![false, true, false])
-    //     })
-    //     .await
-    //     .expect("Filtering failed");
+        let result =
+            WalletState::filter_unspent_utxos(incoming_utxos.clone(), |_absis| async move {
+                Ok(mock_spent_status)
+            })
+            .await
+            .expect("Filtering failed");
 
-    //     // 3. Assert the result
-    //     assert_eq!(result.len(), 2);
-    //     assert_eq!(result[0].abs_i(), utxo1.abs_i());
-    //     assert_eq!(result[1].abs_i(), utxo3.abs_i());
-    // }
+        assert_eq!(
+            vec![
+                incoming_utxos[26].clone(),
+                incoming_utxos[28].clone(),
+                incoming_utxos[29].clone()
+            ],
+            result
+        );
+    }
 }

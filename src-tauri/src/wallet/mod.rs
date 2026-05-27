@@ -162,6 +162,24 @@ impl WalletState {
         Ok(self.scan_config.start_height)
     }
 
+    async fn store_all_key_indices(&self) -> Result<()> {
+        for key_type in KeyType::all_types() {
+            match key_type {
+                KeyType::Generation => {
+                    self.set_generation_key_index(self.generation_key_index())
+                        .await?
+                }
+                KeyType::Symmetric => {
+                    self.set_symmetric_key_index(self.symmetric_key_index())
+                        .await?
+                }
+                _ => todo!(),
+            }
+        }
+
+        Ok(())
+    }
+
     pub(crate) async fn import_randomness(
         &self,
         incoming_utxos: Vec<IncomingUtxoRecoveryData>,
@@ -188,6 +206,10 @@ impl WalletState {
                 _ => todo!(),
             }
         }
+
+        // Bump key indices immediately, to match key count with imported
+        // randomness.
+        self.store_all_key_indices().await?;
 
         // Only consider not-yet-claimed UTXOs
         let incoming_utxos = self.not_yet_claimed(incoming_utxos).await?;
@@ -553,10 +575,7 @@ impl WalletState {
 
         // Bump derivation indices. Must be done *after* the iterators above
         // have been consumed.
-        self.set_generation_key_index(self.generation_key_index())
-            .await?;
-        self.set_symmetric_key_index(self.symmetric_key_index())
-            .await?;
+        self.store_all_key_indices().await?;
 
         Ok(receive.into_iter().collect())
     }
