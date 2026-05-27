@@ -47,7 +47,11 @@ export default function ActionMenu({
           <Text>Remove Wallet</Text>
         </Menu.Item>
         <Menu.Divider />
-        <Menu.Item leftSection={<IconArrowBarToDown size={14} />} onClick={importRandomness}>
+        <Menu.Item
+          leftSection={<IconArrowBarToDown size={14} />}
+          onClick={importRandomness}
+          disabled={!isCurrentWallet}
+        >
           <Text>Import Randomness</Text>
         </Menu.Item>
         <Menu.Divider />
