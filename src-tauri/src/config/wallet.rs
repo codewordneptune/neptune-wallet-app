@@ -1,4 +1,5 @@
 use anyhow::Result;
+use neptune_cash::api::export::KeyType;
 use neptune_cash::api::export::Network;
 use neptune_cash::api::export::SpendingKey;
 use neptune_cash::state::wallet::secret_key_material::SecretKeyMaterial;
@@ -109,13 +110,22 @@ impl Config {
             // 2. Open a temporary connection to JUST this wallet database such
             // that the number of keys per wallet can be read.
             let wallet_pool = WalletState::wallet_database_connection(self, id).await?;
-            let gen_key_idx = WalletState::generation_key_index_from_pool(&wallet_pool)
-                .await
-                .unwrap_or(0);
-            let sym_key_idx = WalletState::symmetric_key_index_from_pool(&wallet_pool)
-                .await
-                .unwrap_or(0);
-            let sec_key_idx = 0; // TODO: add support when secret addresses are added
+            let gen_key_idx =
+                WalletState::persisted_key_index_from_pool(KeyType::Generation, &wallet_pool)
+                    .await
+                    .unwrap_or(0);
+            let sym_key_idx =
+                WalletState::persisted_key_index_from_pool(KeyType::Symmetric, &wallet_pool)
+                    .await
+                    .unwrap_or(0);
+            let ech_idx =
+                WalletState::persisted_key_index_from_pool(KeyType::EcHybrid, &wallet_pool)
+                    .await
+                    .unwrap_or(0);
+            let view_addr_idx =
+                WalletState::persisted_key_index_from_pool(KeyType::ViewingAddress, &wallet_pool)
+                    .await
+                    .unwrap_or(0);
 
             wallet_pool.close().await; // Clean up
 
@@ -127,7 +137,8 @@ impl Config {
                 // Number of keys is the max index plus 1
                 num_generation_addresses: gen_key_idx + 1,
                 num_symmetric_addresses: sym_key_idx + 1,
-                num_secret_addresses: sec_key_idx + 1,
+                num_ec_hybrid_addresses: ech_idx + 1,
+                num_viewing_addresses: view_addr_idx + 1,
             })
         }
         Ok(wallets)
@@ -167,7 +178,8 @@ pub(crate) struct WalletData {
     balance: String,
     num_generation_addresses: u64,
     num_symmetric_addresses: u64,
-    num_secret_addresses: u64,
+    num_ec_hybrid_addresses: u64,
+    num_viewing_addresses: u64,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

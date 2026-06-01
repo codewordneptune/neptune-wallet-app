@@ -7,6 +7,8 @@ use neptune_cash::state::wallet::wallet_state::IncomingUtxoRecoveryData;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::range::Range;
+use std::sync::atomic::Ordering;
+use strum::IntoEnumIterator;
 
 use crate::wallet::UtxoRecoveryData;
 
@@ -43,17 +45,13 @@ impl super::WalletState {
         let mut ret = HashMap::new();
         let receiver_preimages: HashSet<_> =
             incoming_utxos.iter().map(|x| x.receiver_preimage).collect();
-        for key_type in KeyType::all_types() {
+        for key_type in KeyType::iter() {
             let mut max_index = None;
 
             loop {
                 let start = max_index.map(|x| x + 1).unwrap_or(0);
                 let end = start + self.num_future_keys();
-                let keys = match key_type {
-                    KeyType::Generation => self.generation_keys(Range { start, end }),
-                    KeyType::Symmetric => self.symmetric_keys(Range { start, end }),
-                    _ => todo!("Only generation and symmetric key types are currently supported"),
-                };
+                let keys = self.keys(Range { start, end }, key_type);
 
                 let max = keys
                     .iter()
@@ -72,6 +70,34 @@ impl super::WalletState {
         }
 
         ret
+    }
+
+    /// Bump key indices to match the provided values.
+    ///
+    /// Does not persist. Caller must handle this.
+    pub(super) fn bump_key_indices(&self, key_indices: HashMap<KeyType, Option<u64>>) {
+        for (key_type, max_index) in key_indices {
+            let max_index = max_index.unwrap_or(0);
+            match key_type {
+                KeyType::Generation => {
+                    self.generation_key_index
+                        .fetch_max(max_index, Ordering::SeqCst);
+                }
+                KeyType::Symmetric => {
+                    self.symmetric_key_index
+                        .fetch_max(max_index, Ordering::SeqCst);
+                }
+                KeyType::EcHybrid => {
+                    self.ec_hybrid_key_index
+                        .fetch_max(max_index, Ordering::SeqCst);
+                }
+                KeyType::ViewingAddress => {
+                    self.viewing_address_key_index
+                        .fetch_max(max_index, Ordering::SeqCst);
+                }
+                _ => todo!(),
+            }
+        }
     }
 
     /// Return the incoming UTXOs that are not yet known to this wallet.
@@ -188,6 +214,25 @@ mod tests {
         let result = wallet.max_key_index_used(&incoming_utxos);
         assert_eq!(result[&KeyType::Generation], Some(2));
         assert_eq!(result[&KeyType::Symmetric], Some(4));
+    }
+
+    #[tokio::test]
+    async fn bump_key_indices_devnet() {
+        let (incoming_utxos, wallet) = setup().await;
+        let num_keys_before: usize = wallet
+            .known_and_future_keys()
+            .values()
+            .map(|x| x.len())
+            .sum();
+        let key_indices = wallet.max_key_index_used(&incoming_utxos);
+        wallet.bump_key_indices(key_indices);
+        let num_keys_after: usize = wallet
+            .known_and_future_keys()
+            .values()
+            .map(|x| x.len())
+            .sum();
+
+        assert_eq!(6 + num_keys_before, num_keys_after);
     }
 
     #[tokio::test]

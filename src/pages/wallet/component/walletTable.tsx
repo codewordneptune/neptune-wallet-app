@@ -166,10 +166,12 @@ export default function WalletTable() {
           <Badge color="violet" variant="light" size="sm" title="Symmetric Addresses">
             {element.num_symmetric_addresses} Sym
           </Badge>
-          {/* Ready for the secret addresses */}
-          {/* <Badge color="orange" variant="light" size="sm" title="Secret Address Keys"> */}
-          {/* {element.num_secret_addresses} Sec */}
-          {/* </Badge> */}
+          <Badge color="green" variant="light" size="sm" title="EC-hybrid Addresses">
+            {element.num_ec_hybrid_addresses} ECH
+          </Badge>
+          <Badge color="orange" variant="light" size="sm" title="Viewing Addresses">
+            {element.num_viewing_addresses} View
+          </Badge>
         </Flex>
       </Table.Td>
       <Table.Td>
