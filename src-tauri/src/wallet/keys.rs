@@ -26,7 +26,7 @@ impl super::WalletState {
     pub(crate) fn get_known_spending_keys(&self) -> Vec<SpendingKey> {
         let mut all_keys = vec![];
         for key_type in KeyType::iter() {
-            let end = self.ephemeral_key_index(key_type) + 1;
+            let end = self.ephemeral_key_index(key_type);
             let range = Range { start: 0, end };
             let keys = self.keys(range, key_type);
 
@@ -50,7 +50,7 @@ impl super::WalletState {
                 KeyType::ViewingAddress => self.viewing_address_key_index(),
                 _ => todo!(),
             };
-            let end = end + num_future_keys + 1;
+            let end = end + num_future_keys;
             let range = Range { start, end };
             let keys: HashMap<u64, Arc<SpendingKey>> =
                 self.keys(range, key_type).into_iter().collect();
@@ -152,32 +152,30 @@ impl super::WalletState {
 
 #[cfg(test)]
 mod tests {
-    use neptune_cash::api::export::Network;
-
-    use crate::config::wallet::ScanConfig;
-    use crate::config::wallet::WalletConfig;
-    use crate::tests::test_wallet_db;
-    use crate::wallet::WalletState;
+    use crate::tests::test_devnet_wallet;
 
     use super::*;
 
     #[tokio::test]
+    async fn looks_ahead_right_number_of_addresses() {
+        let wallet_state = test_devnet_wallet().await;
+        let num_known_keys = wallet_state.get_known_spending_keys().len();
+        let num_known_and_future: usize = wallet_state
+            .known_and_future_keys()
+            .values()
+            .map(|x| x.len())
+            .sum();
+
+        // Looks ahead for *each* key type. So must multiply by number of key
+        // types to get total number of future keys.
+        let total_num_future = KeyType::iter().count() * wallet_state.num_future_keys() as usize;
+
+        assert_eq!(num_known_keys + total_num_future, num_known_and_future);
+    }
+
+    #[tokio::test]
     async fn knows_one_key_per_key_type_at_init() {
-        let network = Network::Main;
-        let config = WalletConfig {
-            id: 0,
-            key: WalletEntropy::devnet_wallet(),
-            scan_config: ScanConfig {
-                num_keys: 20,
-                start_height: 0,
-                ..Default::default()
-            },
-            network,
-        };
-
-        let db_path = test_wallet_db().await;
-        let wallet_state = WalletState::new(config, &db_path).await.unwrap();
-
+        let wallet_state = test_devnet_wallet().await;
         assert_eq!(
             KeyType::iter().count(),
             wallet_state.get_known_spending_keys().len()

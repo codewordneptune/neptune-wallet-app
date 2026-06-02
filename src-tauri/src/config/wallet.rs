@@ -110,22 +110,22 @@ impl Config {
             // 2. Open a temporary connection to JUST this wallet database such
             // that the number of keys per wallet can be read.
             let wallet_pool = WalletState::wallet_database_connection(self, id).await?;
-            let gen_key_idx =
+            let num_generation_addresses =
                 WalletState::persisted_key_index_from_pool(KeyType::Generation, &wallet_pool)
                     .await
-                    .unwrap_or(0);
-            let sym_key_idx =
+                    .unwrap_or(1);
+            let num_symmetric_addresses =
                 WalletState::persisted_key_index_from_pool(KeyType::Symmetric, &wallet_pool)
                     .await
-                    .unwrap_or(0);
-            let ech_idx =
+                    .unwrap_or(1);
+            let num_ec_hybrid_addresses =
                 WalletState::persisted_key_index_from_pool(KeyType::EcHybrid, &wallet_pool)
                     .await
-                    .unwrap_or(0);
-            let view_addr_idx =
+                    .unwrap_or(1);
+            let num_viewing_addresses =
                 WalletState::persisted_key_index_from_pool(KeyType::ViewingAddress, &wallet_pool)
                     .await
-                    .unwrap_or(0);
+                    .unwrap_or(1);
 
             wallet_pool.close().await; // Clean up
 
@@ -134,11 +134,10 @@ impl Config {
                 name,
                 address,
                 balance,
-                // Number of keys is the max index plus 1
-                num_generation_addresses: gen_key_idx + 1,
-                num_symmetric_addresses: sym_key_idx + 1,
-                num_ec_hybrid_addresses: ech_idx + 1,
-                num_viewing_addresses: view_addr_idx + 1,
+                num_generation_addresses,
+                num_symmetric_addresses,
+                num_ec_hybrid_addresses,
+                num_viewing_addresses,
             })
         }
         Ok(wallets)

@@ -247,6 +247,10 @@ impl WalletState {
         Ok(())
     }
 
+    /// Return the key index of the *next* address to be derived.
+    ///
+    /// Equivalent to the number of addresses of this type derived by the
+    /// wallet.
     pub(crate) async fn persisted_key_index_from_pool(
         key_type: KeyType,
         pool: &Pool<Sqlite>,
@@ -259,17 +263,12 @@ impl WalletState {
         .await;
 
         match row {
-            Ok(row) => Ok(row.get::<String, _>(0).parse()?),
-            Err(sqlx::Error::RowNotFound) => Ok(0),
+            Ok(row) => Ok(std::cmp::max(1, row.get::<String, _>(0).parse()?)),
+            Err(sqlx::Error::RowNotFound) => Ok(1),
             Err(err) => Err(err)?,
         }
     }
 
-    /// Return the persisted key index.
-    ///
-    /// The key index represents the last-used key index, i.e. the index of the
-    /// most recently-derived key of a specific key type, or key with the
-    /// highest index that has received a UTXO.
     pub(crate) async fn persisted_key_index(&self, key_type: KeyType) -> Result<u64> {
         Self::persisted_key_index_from_pool(key_type, &self.pool).await
     }
