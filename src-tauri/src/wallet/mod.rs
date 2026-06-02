@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::path::PathBuf;
-use std::range::Range;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 
@@ -33,6 +32,7 @@ use serde::Serialize;
 use sqlx::Pool;
 use sqlx::Sqlite;
 use sqlx::SqliteConnection;
+use strum::IntoEnumIterator;
 use tracing::*;
 use wallet_file::wallet_dir_by_id;
 use wallet_state_table::UtxoBlockInfo;
@@ -64,8 +64,24 @@ pub(crate) struct WalletState {
     key: WalletEntropy,
     scan_config: ScanConfig,
     pub(crate) network: Network,
+
+    /// The index of the *next* derived address. Equivalently the number of
+    /// derived addresses of this type.
     symmetric_key_index: AtomicU64,
+
+    /// The index of the *next* derived address. Equivalently the number of
+    /// derived addresses of this type.
     generation_key_index: AtomicU64,
+
+    /// The index of the *next* derived address. Equivalently the number of
+    /// derived addresses of this type.
+    ec_hybrid_key_index: AtomicU64,
+
+    /// The index of the *next* derived address. Equivalently the number of
+    /// derived addresses of this type.
+    viewing_address_key_index: AtomicU64,
+
+    /// The number of keys that will be looked ahead when scanning for UTXOs
     num_future_keys: AtomicU64,
     pub(crate) pool: Pool<Sqlite>,
     updater: TransactionUpdater,
@@ -128,8 +144,10 @@ impl WalletState {
             key: wallet_config.key,
             scan_config: wallet_config.scan_config,
             network: wallet_config.network,
-            symmetric_key_index: AtomicU64::new(0),
-            generation_key_index: AtomicU64::new(0),
+            symmetric_key_index: AtomicU64::new(1),
+            generation_key_index: AtomicU64::new(1),
+            ec_hybrid_key_index: AtomicU64::new(1),
+            viewing_address_key_index: AtomicU64::new(1),
             num_future_keys: AtomicU64::new(num_future_keys),
             pool: pool.clone(),
             updater,
@@ -139,12 +157,22 @@ impl WalletState {
         };
 
         state.migrate_tables().await.context("migrate_tables")?;
-        state
-            .generation_key_index
-            .store(state.get_generation_key_index().await?, Ordering::Relaxed);
-        state
-            .symmetric_key_index
-            .store(state.get_symmetric_key_index().await?, Ordering::Relaxed);
+        state.generation_key_index.store(
+            state.persisted_key_index(KeyType::Generation).await?,
+            Ordering::Relaxed,
+        );
+        state.symmetric_key_index.store(
+            state.persisted_key_index(KeyType::Symmetric).await?,
+            Ordering::Relaxed,
+        );
+        state.ec_hybrid_key_index.store(
+            state.persisted_key_index(KeyType::EcHybrid).await?,
+            Ordering::Relaxed,
+        );
+        state.viewing_address_key_index.store(
+            state.persisted_key_index(KeyType::ViewingAddress).await?,
+            Ordering::Relaxed,
+        );
 
         debug!("Wallet state initialized");
 
@@ -163,18 +191,15 @@ impl WalletState {
     }
 
     async fn store_all_key_indices(&self) -> Result<()> {
-        for key_type in KeyType::all_types() {
-            match key_type {
-                KeyType::Generation => {
-                    self.set_generation_key_index(self.generation_key_index())
-                        .await?
-                }
-                KeyType::Symmetric => {
-                    self.set_symmetric_key_index(self.symmetric_key_index())
-                        .await?
-                }
+        for key_type in KeyType::iter() {
+            let value = match key_type {
+                KeyType::Generation => self.generation_key_index(),
+                KeyType::Symmetric => self.symmetric_key_index(),
+                KeyType::EcHybrid => self.ec_hybrid_key_index(),
+                KeyType::ViewingAddress => self.viewing_address_key_index(),
                 _ => todo!(),
-            }
+            };
+            self.set_key_index(key_type, value).await?;
         }
 
         Ok(())
@@ -192,20 +217,7 @@ impl WalletState {
 
         // Bump key indices to ensure wallet tracks enough keys
         let key_indices = self.max_key_index_used(&incoming_utxos);
-        for (key_type, max_index) in key_indices {
-            let max_index = max_index.unwrap_or(0);
-            match key_type {
-                KeyType::Generation => {
-                    self.generation_key_index
-                        .fetch_max(max_index, Ordering::SeqCst);
-                }
-                KeyType::Symmetric => {
-                    self.symmetric_key_index
-                        .fetch_max(max_index, Ordering::SeqCst);
-                }
-                _ => todo!(),
-            }
-        }
+        self.bump_key_indices(key_indices);
 
         // Bump key indices immediately, to match key count with imported
         // randomness.
@@ -384,6 +396,11 @@ impl WalletState {
                     "Addition record of wallet's UTXO must match that from block"
                 );
 
+                if !r.utxo.all_type_script_states_are_valid() {
+                    warn!("Received UTXO with unresolvable type script");
+                    continue;
+                }
+
                 let timelock_info = if let Some(timelock) = incoming_utxo.utxo.release_date() {
                     if timelock > Timestamp::now() {
                         timelock.standard_format()
@@ -485,6 +502,11 @@ impl WalletState {
         Ok(None)
     }
 
+    /// Return all UTXOs we *expect* to receive in the block.
+    ///
+    /// Caller must verify that they are *actually* present by comparing the
+    /// returned list with the list of addition records in the block before
+    /// inserting UTXOs in the database and updating balances.
     async fn par_scan_for_incoming_utxo(
         &self,
         block: &WalletBlock,
@@ -493,39 +515,45 @@ impl WalletState {
 
         let all_addition_records: HashSet<_> = block.all_addition_records().into_iter().collect();
 
-        let spendingkeys = self.generation_keys(Range {
-            start: 0,
-            end: self.generation_key_index() + self.num_future_keys(),
-        });
-        let spend_to_spendingkeys = spendingkeys.par_iter().flat_map(|(key_idx, key)| {
-            let utxo = key.scan_for_announced_utxos(transaction);
-            let actually_received = utxo
-                .iter()
-                .any(|utxo| all_addition_records.contains(&utxo.addition_record()));
-            if !utxo.is_empty() && actually_received {
-                // Only bump index if block actually contains this output.
-                self.generation_key_index
-                    .fetch_max(*key_idx, Ordering::SeqCst);
-            }
-            utxo
-        });
+        let spending_keys = self.known_and_future_keys();
 
-        let symmetric_keys = self.symmetric_keys(Range {
-            start: 0,
-            end: self.symmetric_key_index() + self.num_future_keys(),
-        });
-        let spend_to_symmetrickeys = symmetric_keys.par_iter().flat_map(|(key_idx, key)| {
-            let utxo = key.scan_for_announced_utxos(transaction);
-            let actually_received = utxo
-                .iter()
-                .any(|utxo| all_addition_records.contains(&utxo.addition_record()));
-            if !utxo.is_empty() && actually_received {
-                // Only bump index if block actually contains this output.
-                self.symmetric_key_index
-                    .fetch_max(*key_idx, Ordering::SeqCst);
-            }
-            utxo
-        });
+        let mut all_announced = vec![];
+        for (key_type, keys) in spending_keys {
+            let incoming: Vec<_> = keys
+                .par_iter()
+                .map(|(key_idx, key)| {
+                    let utxos: Vec<_> = key.scan_for_announced_utxos(transaction);
+                    let actually_received = utxos
+                        .iter()
+                        .any(|utxo| all_addition_records.contains(&utxo.addition_record()));
+                    if !utxos.is_empty() && actually_received {
+                        // Only bump index if block actually contains this output.
+
+                        let new_index = *key_idx + 1;
+                        match key_type {
+                            KeyType::Generation => self
+                                .generation_key_index
+                                .fetch_max(new_index, Ordering::SeqCst),
+                            KeyType::Symmetric => self
+                                .symmetric_key_index
+                                .fetch_max(new_index, Ordering::SeqCst),
+                            KeyType::EcHybrid => self
+                                .ec_hybrid_key_index
+                                .fetch_max(new_index, Ordering::SeqCst),
+                            KeyType::ViewingAddress => self
+                                .viewing_address_key_index
+                                .fetch_max(new_index, Ordering::SeqCst),
+                            _ => todo!(),
+                        };
+                    }
+
+                    utxos
+                })
+                .flatten()
+                .collect();
+
+            all_announced.extend(incoming);
+        }
 
         let (own_guesser_address, guesser_key_preimage) = {
             let own_guesser_key = self.key.guesser_fee_key();
@@ -567,8 +595,8 @@ impl WalletState {
         // Ensure no double count in case UTXO is both expected and announced.
         // This is done by stroring all incoming UTXOs in a hash set, thus
         // removing duplicates.
-        let receive: HashSet<_> = spend_to_spendingkeys
-            .chain(spend_to_symmetrickeys)
+        let receive: HashSet<_> = all_announced
+            .into_iter()
             .chain(gusser_incoming_utxos)
             .chain(expected_utxos)
             .collect();
@@ -693,6 +721,8 @@ fn incoming_utxo_recovery_data_from_incomming_utxo(
 
 #[cfg(test)]
 mod tests {
+    use std::range::Range;
+
     use neptune_cash::api::export::NativeCurrencyAmount;
     use neptune_cash::api::export::SpendingKey;
     use neptune_cash::application::json_rpc::core::model::wallet::block::RpcWalletBlock;
@@ -701,23 +731,22 @@ mod tests {
     use tracing_test::traced_test;
 
     use super::*;
+    use crate::tests::test_devnet_wallet;
     use crate::tests::test_wallet_db;
     use crate::tests::wallet_block_from_test_data;
     use crate::wallet::sync::SyncState;
 
     impl WalletState {
         fn get_future_spending_keys(&self) -> Vec<(u64, std::sync::Arc<SpendingKey>)> {
-            let last_gen_key = self.generation_key_index() + self.scan_config.num_keys;
-            let last_sym_key = self.symmetric_key_index() + self.scan_config.num_keys;
+            let mut keys = vec![];
+            for key_type in KeyType::iter() {
+                let start = 0;
+                let end = self.ephemeral_key_index(key_type) + 1;
+                let end = end + self.scan_config.num_keys;
+                let range = Range { start, end };
 
-            let mut keys = self.generation_keys(Range {
-                start: 0,
-                end: last_gen_key,
-            });
-            keys.extend(self.symmetric_keys(Range {
-                start: 0,
-                end: last_sym_key,
-            }));
+                keys.extend(self.keys(range, key_type));
+            }
 
             keys
         }
@@ -726,14 +755,12 @@ mod tests {
     #[traced_test]
     #[tokio::test]
     async fn print_future_addresses() {
-        // Verify that generation and symmetric keys of higher indices can be
-        // found.
         let network = Network::Main;
         let config = WalletConfig {
             id: 0,
             key: WalletEntropy::devnet_wallet(),
             scan_config: ScanConfig {
-                num_keys: 20,
+                num_keys: 60,
                 start_height: 0,
                 ..Default::default()
             },
@@ -741,6 +768,7 @@ mod tests {
         };
 
         let db_path = test_wallet_db().await;
+
         let wallet_state = WalletState::new(config, &db_path).await.unwrap();
 
         println!("Known addresses:");
@@ -778,13 +806,13 @@ mod tests {
             },
             network,
         };
-
         let db_path = test_wallet_db().await;
         let wallet_state = WalletState::new(config.clone(), &db_path).await.unwrap();
+
         assert_eq!(
-            0,
+            1,
             wallet_state.generation_key_index(),
-            "Key index must be 0 prior to handling of block"
+            "Key index must be 1 prior to handling of block"
         );
 
         let num_checked_addrs_before = wallet_state.get_future_spending_keys().len();
@@ -802,17 +830,17 @@ mod tests {
             NativeCurrencyAmount::coins(1).half() + NativeCurrencyAmount::coins(1).half().half();
         assert_eq!(three_quarters, wallet_state.get_balance().await.unwrap());
         assert_eq!(
-            1,
+            2,
             wallet_state.generation_key_index(),
-            "Key index must be 1 after handling block, as key with index 1 got a UTXO in it"
+            "Key index must be 2 after handling block, as key with index 1 got a UTXO in it"
         );
 
         // Verify that bumping of keys was persisted.
         let wallet_state_persisted1 = WalletState::new(config.clone(), &db_path).await.unwrap();
         assert_eq!(
-            1,
+            2,
             wallet_state_persisted1.generation_key_index(),
-            "Persisted key index must be 1"
+            "Persisted key index must match ephemeral key index"
         );
 
         // In block 38'289, the wallet sends 0.75 NPT, and receives 0.50 NPT.
@@ -829,17 +857,17 @@ mod tests {
             wallet_state.get_balance().await.unwrap()
         );
         assert_eq!(
-            2,
+            3,
             wallet_state.generation_key_index(),
-            "Key index must be 2 after receiving UTXO to key with index 2"
+            "Key index must be 3 after receiving UTXO to key with index 2"
         );
 
         // Verify that bumping of keys was persisted.
         let wallet_state_persisted2 = WalletState::new(config, &db_path).await.unwrap();
         assert_eq!(
-            2,
+            3,
             wallet_state_persisted2.generation_key_index(),
-            "Persisted key index must be 2"
+            "Persisted key index must match ephemeral key index"
         );
         let num_checked_addrs_after = wallet_state.get_future_spending_keys().len();
         assert_eq!(
@@ -867,9 +895,9 @@ mod tests {
         let db_path = test_wallet_db().await;
         let wallet_state = WalletState::new(config.clone(), &db_path).await.unwrap();
         assert_eq!(
-            0,
+            1,
             wallet_state.symmetric_key_index(),
-            "Key index must be 0 prior to handling of block"
+            "Key index must be 1 prior to handling of block"
         );
 
         let block = wallet_block_from_test_data(38404).unwrap();
@@ -877,15 +905,15 @@ mod tests {
         let num_checked_addrs_before = wallet_state.get_future_spending_keys().len();
         wallet_state.update_new_tip(&block, false).await.unwrap();
         assert_eq!(
-            4,
+            5,
             wallet_state.symmetric_key_index(),
-            "Symmetric key index must be 4 after handling block, as key with index 4 got a UTXO in it"
+            "Symmetric key index must be 5 after handling block, as key with index 4 got a UTXO in it"
         );
 
         // Verify that bumping of keys was persisted.
         let wallet_state_persisted = WalletState::new(config, &db_path).await.unwrap();
         assert_eq!(
-            4,
+            5,
             wallet_state_persisted.symmetric_key_index(),
             "Persisted key index must match key index"
         );
@@ -929,7 +957,6 @@ mod tests {
             },
             network,
         };
-
         let db_path = test_wallet_db().await;
         let wallet_state = WalletState::new(config.clone(), &db_path).await.unwrap();
 
@@ -946,9 +973,9 @@ mod tests {
         );
 
         assert_eq!(
-            4,
+            5,
             wallet_state.symmetric_key_index(),
-            "Symmetric key index must be 4 after handling block, as key with index 4 got a UTXO in it"
+            "Symmetric key index must be 5 after handling block, as key with index 4 got a UTXO in it"
         );
     }
 
@@ -956,23 +983,12 @@ mod tests {
     #[tokio::test]
     async fn genesis_credits_devnet_wallet() {
         let network = Network::Main;
-        let config = WalletConfig {
-            id: 0,
-            key: WalletEntropy::devnet_wallet(),
-            scan_config: ScanConfig {
-                num_keys: 1,
-                start_height: 0,
-                ..Default::default()
-            },
-            network,
-        };
-
-        let db_path = test_wallet_db().await;
-        let wallet_state = WalletState::new(config, &db_path).await.unwrap();
+        let wallet_state = test_devnet_wallet().await;
 
         let genesis: RpcWalletBlock = (&Block::genesis(network)).into();
         let genesis: WalletBlock = genesis.into();
         let premine_keys = wallet_state.get_known_spending_keys();
+        println!("Num premine keys: {}", premine_keys.len());
 
         let expected_utxos = SyncState::check_premine_for_tests(network, &premine_keys);
         wallet_state

@@ -7,6 +7,11 @@ use neptune_cash::state::wallet::wallet_state::IncomingUtxoRecoveryData;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::range::Range;
+use std::sync::atomic::Ordering;
+use strum::IntoEnumIterator;
+use tracing::debug;
+use tracing::trace;
+use tracing::warn;
 
 use crate::wallet::UtxoRecoveryData;
 
@@ -43,17 +48,15 @@ impl super::WalletState {
         let mut ret = HashMap::new();
         let receiver_preimages: HashSet<_> =
             incoming_utxos.iter().map(|x| x.receiver_preimage).collect();
-        for key_type in KeyType::all_types() {
+        for key_type in KeyType::iter() {
             let mut max_index = None;
 
             loop {
                 let start = max_index.map(|x| x + 1).unwrap_or(0);
                 let end = start + self.num_future_keys();
-                let keys = match key_type {
-                    KeyType::Generation => self.generation_keys(Range { start, end }),
-                    KeyType::Symmetric => self.symmetric_keys(Range { start, end }),
-                    _ => todo!("Only generation and symmetric key types are currently supported"),
-                };
+                let keys = self.keys(Range { start, end }, key_type);
+
+                trace!("Scanning {key_type} in ({start}..{end})");
 
                 let max = keys
                     .iter()
@@ -62,8 +65,10 @@ impl super::WalletState {
                     .max();
 
                 if let Some(max) = max {
+                    debug!("found match {key_type}, key index: {max}");
                     max_index = Some(max);
                 } else {
+                    debug!("{key_type}: Ending scan");
                     break;
                 }
             }
@@ -72,6 +77,38 @@ impl super::WalletState {
         }
 
         ret
+    }
+
+    /// Bump key indices to match the provided values.
+    ///
+    /// Does not persist. Caller must handle this.
+    pub(super) fn bump_key_indices(&self, key_indices: HashMap<KeyType, Option<u64>>) {
+        for (key_type, max_index) in key_indices {
+            let max_index = max_index.unwrap_or(0);
+
+            // new index is max-used index plus one since the key index
+            // represents the *next* address to be derived.
+            let new_index = max_index + 1;
+            match key_type {
+                KeyType::Generation => {
+                    self.generation_key_index
+                        .fetch_max(new_index, Ordering::SeqCst);
+                }
+                KeyType::Symmetric => {
+                    self.symmetric_key_index
+                        .fetch_max(new_index, Ordering::SeqCst);
+                }
+                KeyType::EcHybrid => {
+                    self.ec_hybrid_key_index
+                        .fetch_max(new_index, Ordering::SeqCst);
+                }
+                KeyType::ViewingAddress => {
+                    self.viewing_address_key_index
+                        .fetch_max(new_index, Ordering::SeqCst);
+                }
+                _ => todo!(),
+            }
+        }
     }
 
     /// Return the incoming UTXOs that are not yet known to this wallet.
@@ -111,10 +148,26 @@ impl super::WalletState {
             .values()
             .flat_map(|keys| keys.values().map(|key| key.privacy_preimage()))
             .collect();
-        incoming_utxos
-            .into_iter()
-            .filter(|incoming| all_privacy_preimages.contains(&incoming.receiver_preimage))
-            .collect()
+
+        let num_keys: usize = all_keys.values().map(|x| x.len()).sum();
+        debug!("Num keys: {num_keys}");
+        debug!("Num privacy preimages: {}", all_privacy_preimages.len());
+
+        let mut ret = vec![];
+        for incoming in incoming_utxos {
+            if all_privacy_preimages.contains(&incoming.receiver_preimage) {
+                ret.push(incoming);
+            } else {
+                warn!("Does not have a key for entry in incoming randomness. Missing key for AOCL leaf {}", incoming.aocl_index);
+            }
+        }
+
+        ret
+
+        // incoming_utxos
+        //     .into_iter()
+        //     .filter(|incoming| all_privacy_preimages.contains(&incoming.receiver_preimage))
+        //     .collect()
     }
 
     /// Only return those UTXOs that are not spent.
@@ -144,7 +197,9 @@ impl super::WalletState {
 #[cfg(test)]
 mod tests {
     use neptune_cash::api::export::Network;
+    use neptune_cash::api::export::SpendingKey;
     use neptune_cash::api::export::WalletEntropy;
+    use tracing_test::traced_test;
 
     use crate::config::wallet::ScanConfig;
     use crate::config::wallet::WalletConfig;
@@ -154,13 +209,13 @@ mod tests {
 
     use super::*;
 
-    async fn setup() -> (Vec<IncomingUtxoRecoveryData>, WalletState) {
+    async fn setup_wallet(num_future_keys: u64) -> WalletState {
         let network = Network::Main;
         let config = WalletConfig {
             id: 0,
             key: WalletEntropy::devnet_wallet(),
             scan_config: ScanConfig {
-                num_keys: 100,
+                num_keys: num_future_keys,
                 start_height: 0,
                 recover_from_sym_digest_keys: false,
             },
@@ -168,55 +223,176 @@ mod tests {
         };
 
         let db_path = test_wallet_db().await;
-        let wallet = WalletState::new(config.clone(), &db_path).await.unwrap();
-        let incoming_utxos = load_incoming_randomness("devnet_incoming_randomness_block38434.dat");
+        WalletState::new(config.clone(), &db_path).await.unwrap()
+    }
 
-        (incoming_utxos, wallet)
+    fn incoming_randomness_38343() -> Vec<IncomingUtxoRecoveryData> {
+        load_incoming_randomness("devnet_incoming_randomness_block38434.dat")
+    }
+
+    fn incoming_randomness_41089() -> Vec<IncomingUtxoRecoveryData> {
+        load_incoming_randomness("devnet_incoming_randomness_block41089.dat")
+    }
+
+    fn incoming_randomness_41098() -> Vec<IncomingUtxoRecoveryData> {
+        load_incoming_randomness("devnet_incoming_randomness_block41098.dat")
     }
 
     #[tokio::test]
     async fn deduplicate_devnet() {
-        let (incoming_utxos, _) = setup().await;
-        let expected = incoming_utxos.clone();
-        let result = WalletState::deduplicate_recovery_data(incoming_utxos);
+        let incoming = incoming_randomness_38343();
+        let expected = incoming.clone();
+        let result = WalletState::deduplicate_recovery_data(incoming);
         assert_eq!(expected, result);
     }
 
+    #[traced_test]
     #[tokio::test]
-    async fn max_key_index_devnet() {
-        let (incoming_utxos, wallet) = setup().await;
-        let result = wallet.max_key_index_used(&incoming_utxos);
+    async fn max_key_index_devnet_38343_short_lookahead() {
+        let wallet = setup_wallet(4).await;
+        let incoming = incoming_randomness_38343();
+        let result = wallet.max_key_index_used(&incoming);
         assert_eq!(result[&KeyType::Generation], Some(2));
         assert_eq!(result[&KeyType::Symmetric], Some(4));
     }
 
+    #[traced_test]
     #[tokio::test]
-    async fn not_yet_claimed_devnet() {
-        let (incoming_utxos, wallet) = setup().await;
-        let expected: Vec<UtxoRecoveryData> = incoming_utxos
-            .clone()
-            .into_iter()
-            .map(|x| x.into())
-            .collect();
-        let result = wallet.not_yet_claimed(incoming_utxos).await.unwrap();
+    async fn have_matching_keys_devnet_short_lookahead() {
+        let wallet = setup_wallet(4).await;
+        let incoming = incoming_randomness_38343();
+        let result = wallet.max_key_index_used(&incoming);
+        wallet.bump_key_indices(result);
+        let incoming: Vec<UtxoRecoveryData> = incoming.into_iter().map(|x| x.into()).collect();
+        let expected = incoming.clone();
+        let result = wallet.have_matching_keys(incoming);
+        assert_eq!(expected.len(), result.len());
         assert_eq!(expected, result);
     }
 
     #[tokio::test]
-    async fn have_matching_keys_devnet() {
-        let (incoming_utxos, wallet) = setup().await;
-        let incoming_utxos: Vec<UtxoRecoveryData> =
-            incoming_utxos.into_iter().map(|x| x.into()).collect();
-        let expected = incoming_utxos.clone();
-        let result = wallet.have_matching_keys(incoming_utxos);
+    async fn max_key_index_devnet_38343() {
+        let wallet = setup_wallet(25).await;
+        let incoming = incoming_randomness_38343();
+        let result = wallet.max_key_index_used(&incoming);
+        assert_eq!(result[&KeyType::Generation], Some(2));
+        assert_eq!(result[&KeyType::Symmetric], Some(4));
+        assert_eq!(result[&KeyType::EcHybrid], None);
+        assert_eq!(result[&KeyType::ViewingAddress], None);
+    }
+
+    #[tokio::test]
+    async fn max_key_index_devnet_41089() {
+        let wallet = setup_wallet(25).await;
+        let incoming = incoming_randomness_41089();
+        let result = wallet.max_key_index_used(&incoming);
+        assert_eq!(result[&KeyType::Generation], Some(2));
+        assert_eq!(result[&KeyType::Symmetric], Some(4));
+        assert_eq!(result[&KeyType::EcHybrid], Some(21));
+        assert_eq!(result[&KeyType::ViewingAddress], Some(11));
+    }
+
+    #[tokio::test]
+    async fn max_key_index_devnet_41098() {
+        let wallet = setup_wallet(25).await;
+        let incoming = incoming_randomness_41098();
+        let result = wallet.max_key_index_used(&incoming);
+        assert_eq!(result[&KeyType::Generation], Some(2));
+        assert_eq!(result[&KeyType::Symmetric], Some(4));
+        assert_eq!(result[&KeyType::EcHybrid], Some(42));
+        assert_eq!(result[&KeyType::ViewingAddress], Some(12));
+    }
+
+    #[tokio::test]
+    async fn bump_key_indices_devnet_38343() {
+        let wallet = setup_wallet(25).await;
+        let incoming = incoming_randomness_38343();
+        let num_keys_before: usize = wallet
+            .known_and_future_keys()
+            .values()
+            .map(|x| x.len())
+            .sum();
+        let key_indices = wallet.max_key_index_used(&incoming);
+        wallet.bump_key_indices(key_indices);
+        let num_keys_after: usize = wallet
+            .known_and_future_keys()
+            .values()
+            .map(|x| x.len())
+            .sum();
+
+        assert_eq!(6 + num_keys_before, num_keys_after);
+
+        // Verify that wallet's index represents *next* derived key
+        assert_eq!(3, wallet.ephemeral_key_index(KeyType::Generation));
+        assert_eq!(5, wallet.ephemeral_key_index(KeyType::Symmetric));
+        assert_eq!(1, wallet.ephemeral_key_index(KeyType::EcHybrid));
+        assert_eq!(1, wallet.ephemeral_key_index(KeyType::ViewingAddress));
+
+        // Verify known (not future) keys after
+        let known_keys = wallet.get_known_spending_keys();
+        assert_eq!(
+            3,
+            known_keys
+                .iter()
+                .filter(|x| matches!(x, SpendingKey::Generation(_)))
+                .count()
+        );
+        assert_eq!(
+            5,
+            known_keys
+                .iter()
+                .filter(|x| matches!(x, SpendingKey::Symmetric(_)))
+                .count()
+        );
+        assert_eq!(
+            1,
+            known_keys
+                .iter()
+                .filter(|x| matches!(x, SpendingKey::EcHybrid(_)))
+                .count()
+        );
+        assert_eq!(
+            1,
+            known_keys
+                .iter()
+                .filter(|x| matches!(x, SpendingKey::ViewingAddressKey(_)))
+                .count()
+        );
+    }
+
+    #[tokio::test]
+    async fn not_yet_claimed_devnet() {
+        let wallet = setup_wallet(25).await;
+        let incoming = incoming_randomness_38343();
+        let expected: Vec<UtxoRecoveryData> =
+            incoming.clone().into_iter().map(|x| x.into()).collect();
+        let result = wallet.not_yet_claimed(incoming).await.unwrap();
         assert_eq!(expected, result);
+    }
+
+    #[traced_test]
+    #[tokio::test]
+    async fn have_matching_keys_devnet() {
+        for incoming in [
+            incoming_randomness_38343(),
+            incoming_randomness_41089(),
+            incoming_randomness_41098(),
+        ] {
+            let wallet = setup_wallet(25).await;
+            let key_indices = wallet.max_key_index_used(&incoming);
+            wallet.bump_key_indices(key_indices);
+            let incoming: Vec<UtxoRecoveryData> = incoming.into_iter().map(|x| x.into()).collect();
+            let expected = incoming.clone();
+            let result = wallet.have_matching_keys(incoming);
+            assert_eq!(expected.len(), result.len());
+            assert_eq!(expected, result);
+        }
     }
 
     #[tokio::test]
     async fn filter_unspents() {
-        let (incoming_utxos, _) = setup().await;
-        let incoming_utxos: Vec<UtxoRecoveryData> =
-            incoming_utxos.into_iter().map(|x| x.into()).collect();
+        let incoming = incoming_randomness_38343();
+        let incoming: Vec<UtxoRecoveryData> = incoming.into_iter().map(|x| x.into()).collect();
 
         // Mock spent status to what it was at block height 38,434
         let mut mock_spent_status = vec![true; 30];
@@ -224,18 +400,17 @@ mod tests {
         mock_spent_status[28] = false;
         mock_spent_status[29] = false;
 
-        let result =
-            WalletState::filter_unspent_utxos(incoming_utxos.clone(), |_absis| async move {
-                Ok(mock_spent_status)
-            })
-            .await
-            .expect("Filtering failed");
+        let result = WalletState::filter_unspent_utxos(incoming.clone(), |_absis| async move {
+            Ok(mock_spent_status)
+        })
+        .await
+        .expect("Filtering failed");
 
         assert_eq!(
             vec![
-                incoming_utxos[26].clone(),
-                incoming_utxos[28].clone(),
-                incoming_utxos[29].clone()
+                incoming[26].clone(),
+                incoming[28].clone(),
+                incoming[29].clone()
             ],
             result
         );

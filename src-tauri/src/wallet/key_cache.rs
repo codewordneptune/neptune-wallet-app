@@ -1,11 +1,13 @@
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use neptune_cash::api::export::SpendingKey;
+use neptune_cash::api::export::{KeyType, SpendingKey};
 
 pub(super) struct KeyCache {
     symmetric_keys: DashMap<u64, Arc<SpendingKey>>,
     generation_spending_keys: DashMap<u64, Arc<SpendingKey>>,
+    ec_hybrid_keys: DashMap<u64, Arc<SpendingKey>>,
+    viewing_address: DashMap<u64, Arc<SpendingKey>>,
 }
 
 impl KeyCache {
@@ -13,22 +15,30 @@ impl KeyCache {
         Self {
             symmetric_keys: DashMap::new(),
             generation_spending_keys: DashMap::new(),
+            ec_hybrid_keys: DashMap::new(),
+            viewing_address: DashMap::new(),
         }
     }
-    pub(crate) fn get_symmetric_key(&self, index: u64) -> Option<Arc<SpendingKey>> {
-        self.symmetric_keys.get(&index).map(|d| d.value().clone())
-    }
-    pub(crate) fn get_generation_spending_key(&self, index: u64) -> Option<Arc<SpendingKey>> {
-        self.generation_spending_keys
-            .get(&index)
-            .map(|d| d.value().clone())
+
+    pub(crate) fn add_key(&self, index: u64, key: Arc<SpendingKey>) {
+        match key.as_ref() {
+            SpendingKey::Generation(_) => self.generation_spending_keys.insert(index, key),
+            SpendingKey::Symmetric(_) => self.symmetric_keys.insert(index, key),
+            SpendingKey::EcHybrid(_) => self.ec_hybrid_keys.insert(index, key),
+            SpendingKey::ViewingAddressKey(_) => self.viewing_address.insert(index, key),
+            _ => todo!("Only known key types are supported"),
+        };
     }
 
-    pub(crate) fn add_symmetric_key(&self, index: u64, key: Arc<SpendingKey>) {
-        self.symmetric_keys.insert(index, key);
-    }
+    pub(crate) fn get_key(&self, key_type: KeyType, index: u64) -> Option<Arc<SpendingKey>> {
+        let key = match key_type {
+            KeyType::Generation => self.generation_spending_keys.get(&index),
+            KeyType::Symmetric => self.symmetric_keys.get(&index),
+            KeyType::EcHybrid => self.ec_hybrid_keys.get(&index),
+            KeyType::ViewingAddress => self.viewing_address.get(&index),
+            _ => todo!("Only known key types are supported"),
+        };
 
-    pub(crate) fn add_generation_spending_key(&self, index: u64, key: Arc<SpendingKey>) {
-        self.generation_spending_keys.insert(index, key);
+        key.map(|d| d.value().clone())
     }
 }

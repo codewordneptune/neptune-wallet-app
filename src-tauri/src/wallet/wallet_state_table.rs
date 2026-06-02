@@ -1,6 +1,7 @@
 use std::sync::atomic::Ordering;
 
 use anyhow::Result;
+use neptune_cash::api::export::KeyType;
 use neptune_cash::api::export::Timestamp;
 use neptune_cash::prelude::tasm_lib::prelude::Digest;
 use neptune_cash::state::wallet::expected_utxo::ExpectedUtxo;
@@ -198,6 +199,16 @@ impl ExpectedUtxoData {
 }
 
 impl WalletState {
+    fn db_id(key_type: KeyType) -> &'static str {
+        match key_type {
+            KeyType::Generation => "num_generation_spending_keys",
+            KeyType::Symmetric => "num_symmetric_keys",
+            KeyType::EcHybrid => "num_ec_hybrid_keys",
+            KeyType::ViewingAddress => "num_viewing_address_keys",
+            _ => todo!(),
+        }
+    }
+
     pub(crate) async fn migrate_tables(&self) -> anyhow::Result<()> {
         let mut migrator = Migrator::default();
         // Adding migration can fail if another migration with same app and name and different values gets added
@@ -213,63 +224,53 @@ impl WalletState {
         Ok(())
     }
 
-    pub(crate) async fn set_symmetric_key_index(&self, value: u64) -> Result<()> {
+    pub(crate) async fn set_key_index(&self, key_type: KeyType, value: u64) -> Result<()> {
+        let db_id = Self::db_id(key_type);
+        trace!("setting {db_id} key index to: {value}");
         let value_db = value.to_string();
-        sqlx::query("INSERT INTO wallet_state_keys (id, value) VALUES ('num_symmetric_keys', ?) ON CONFLICT(id) DO UPDATE SET value = ?")
+        let query = format!("INSERT INTO wallet_state_keys (id, value) VALUES ('{db_id}', ?) ON CONFLICT(id) DO UPDATE SET value = ?");
+        sqlx::query(&query)
             .bind(&value_db)
             .bind(&value_db)
             .execute(&self.pool)
             .await?;
 
-        self.symmetric_key_index.store(value, Ordering::Relaxed);
-
-        Ok(())
-    }
-
-    pub(crate) async fn symmetric_key_index_from_pool(pool: &Pool<Sqlite>) -> Result<u64> {
-        let row =
-            sqlx::query("SELECT value FROM wallet_state_keys WHERE id = 'num_symmetric_keys'")
-                .fetch_one(pool)
-                .await;
-
-        match row {
-            Ok(row) => Ok(row.get::<String, _>(0).parse()?),
-            Err(sqlx::Error::RowNotFound) => Ok(0),
-            Err(err) => Err(err)?,
+        match key_type {
+            KeyType::Generation => self.generation_key_index.store(value, Ordering::Relaxed),
+            KeyType::Symmetric => self.symmetric_key_index.store(value, Ordering::Relaxed),
+            KeyType::EcHybrid => self.ec_hybrid_key_index.store(value, Ordering::Relaxed),
+            KeyType::ViewingAddress => self
+                .viewing_address_key_index
+                .store(value, Ordering::Relaxed),
+            _ => todo!(),
         }
-    }
-
-    pub(crate) async fn get_symmetric_key_index(&self) -> Result<u64> {
-        Self::symmetric_key_index_from_pool(&self.pool).await
-    }
-
-    pub(crate) async fn set_generation_key_index(&self, value: u64) -> Result<()> {
-        trace!("setting generation key index to: {value}");
-        let value_db = value.to_string();
-        sqlx::query("INSERT INTO wallet_state_keys (id, value) VALUES ('num_generation_spending_keys', ?) ON CONFLICT(id) DO UPDATE SET value = ?")
-            .bind(&value_db)
-            .bind(&value_db)
-            .execute(&self.pool).await?;
-        self.generation_key_index.store(value, Ordering::Relaxed);
         Ok(())
     }
 
-    pub(crate) async fn generation_key_index_from_pool(pool: &Pool<Sqlite>) -> Result<u64> {
-        let row = sqlx::query(
-            "SELECT value FROM wallet_state_keys WHERE id = 'num_generation_spending_keys'",
-        )
+    /// Return the key index of the *next* address to be derived.
+    ///
+    /// Equivalent to the number of addresses of this type derived by the
+    /// wallet.
+    pub(crate) async fn persisted_key_index_from_pool(
+        key_type: KeyType,
+        pool: &Pool<Sqlite>,
+    ) -> Result<u64> {
+        let db_id = Self::db_id(key_type);
+        let row = sqlx::query(&format!(
+            "SELECT value FROM wallet_state_keys WHERE id = '{db_id}'"
+        ))
         .fetch_one(pool)
         .await;
 
         match row {
-            Ok(row) => Ok(row.get::<String, _>(0).parse()?),
-            Err(sqlx::Error::RowNotFound) => Ok(0),
+            Ok(row) => Ok(std::cmp::max(1, row.get::<String, _>(0).parse()?)),
+            Err(sqlx::Error::RowNotFound) => Ok(1),
             Err(err) => Err(err)?,
         }
     }
 
-    pub(crate) async fn get_generation_key_index(&self) -> Result<u64> {
-        Self::generation_key_index_from_pool(&self.pool).await
+    pub(crate) async fn persisted_key_index(&self, key_type: KeyType) -> Result<u64> {
+        Self::persisted_key_index_from_pool(key_type, &self.pool).await
     }
 
     pub(crate) async fn set_tip(
@@ -547,6 +548,7 @@ mod tests {
     use crate::config::wallet::ScanConfig;
     use crate::config::wallet::WalletConfig;
     use crate::tests::test_wallet_db;
+
     #[tokio::test]
     async fn test_migrate_tables() {
         let config = WalletConfig {
@@ -565,10 +567,50 @@ mod tests {
 
         wallet_state.migrate_tables().await.unwrap();
 
-        wallet_state.set_symmetric_key_index(1).await.unwrap();
-        wallet_state.set_generation_key_index(2).await.unwrap();
+        wallet_state
+            .set_key_index(KeyType::Symmetric, 2)
+            .await
+            .unwrap();
+        wallet_state
+            .set_key_index(KeyType::Generation, 3)
+            .await
+            .unwrap();
+        wallet_state
+            .set_key_index(KeyType::EcHybrid, 4)
+            .await
+            .unwrap();
+        wallet_state
+            .set_key_index(KeyType::ViewingAddress, 5)
+            .await
+            .unwrap();
 
-        assert_eq!(wallet_state.get_symmetric_key_index().await.unwrap(), 1);
-        assert_eq!(wallet_state.get_generation_key_index().await.unwrap(), 2);
+        assert_eq!(
+            wallet_state
+                .persisted_key_index(KeyType::Symmetric)
+                .await
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            wallet_state
+                .persisted_key_index(KeyType::Generation)
+                .await
+                .unwrap(),
+            3
+        );
+        assert_eq!(
+            wallet_state
+                .persisted_key_index(KeyType::EcHybrid)
+                .await
+                .unwrap(),
+            4
+        );
+        assert_eq!(
+            wallet_state
+                .persisted_key_index(KeyType::ViewingAddress)
+                .await
+                .unwrap(),
+            5
+        );
     }
 }

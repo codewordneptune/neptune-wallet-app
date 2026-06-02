@@ -6,12 +6,35 @@ use std::io::BufReader;
 use std::path::Path;
 use std::path::PathBuf;
 
+use neptune_cash::api::export::Network;
+use neptune_cash::api::export::WalletEntropy;
 use neptune_cash::application::json_rpc::core::model::wallet::block::RpcWalletBlock;
 use neptune_cash::state::wallet::wallet_state::IncomingUtxoRecoveryData;
 use rand::distr::Alphanumeric;
 use rand::distr::SampleString;
 
+use crate::config::wallet::ScanConfig;
+use crate::config::wallet::WalletConfig;
 use crate::wallet::wallet_block::WalletBlock;
+use crate::wallet::WalletState;
+
+pub(crate) async fn test_devnet_wallet() -> WalletState {
+    let network = Network::Main;
+    let config = WalletConfig {
+        id: 0,
+        key: WalletEntropy::devnet_wallet(),
+        scan_config: ScanConfig {
+            num_keys: 20,
+            start_height: 0,
+            ..Default::default()
+        },
+        network,
+    };
+
+    let db_path = test_wallet_db().await;
+
+    WalletState::new(config, &db_path).await.unwrap()
+}
 
 /// Create a database path in a randomly named directory so filesystem-bound
 /// tests can run in parallel.
