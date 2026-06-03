@@ -10,6 +10,11 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Applies to all jobs in this file
+permissions:
+  contents: read
+
+
 jobs:
   test:
     strategy:

@@ -4,6 +4,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+
+# Applies to all jobs in this file
+permissions:
+  contents: read
+
 jobs:
   test:
     timeout-minutes: 60
