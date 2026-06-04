@@ -136,19 +136,19 @@ impl super::WalletState {
         }
     }
 
-    pub(crate) fn symmetric_key_index(&self) -> u64 {
+    fn symmetric_key_index(&self) -> u64 {
         self.symmetric_key_index.load(Ordering::Relaxed)
     }
 
-    pub(crate) fn generation_key_index(&self) -> u64 {
+    fn generation_key_index(&self) -> u64 {
         self.generation_key_index.load(Ordering::Relaxed)
     }
 
-    pub(crate) fn ec_hybrid_key_index(&self) -> u64 {
+    fn ec_hybrid_key_index(&self) -> u64 {
         self.ec_hybrid_key_index.load(Ordering::Relaxed)
     }
 
-    pub(crate) fn viewing_address_key_index(&self) -> u64 {
+    fn viewing_address_key_index(&self) -> u64 {
         self.viewing_address_key_index.load(Ordering::Relaxed)
     }
 

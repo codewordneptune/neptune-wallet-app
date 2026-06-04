@@ -53,7 +53,7 @@ pub(crate) mod wallet_block;
 pub(crate) use input::InputSelectionRule;
 pub(crate) mod block_cache;
 mod key_cache;
-mod keys;
+pub(crate) mod keys;
 mod pending;
 mod spend;
 pub(crate) mod sync;
@@ -192,13 +192,7 @@ impl WalletState {
 
     async fn store_all_key_indices(&self) -> Result<()> {
         for key_type in KeyType::iter() {
-            let value = match key_type {
-                KeyType::Generation => self.generation_key_index(),
-                KeyType::Symmetric => self.symmetric_key_index(),
-                KeyType::EcHybrid => self.ec_hybrid_key_index(),
-                KeyType::ViewingAddress => self.viewing_address_key_index(),
-                _ => todo!(),
-            };
+            let value = self.ephemeral_key_index(key_type);
             self.set_key_index(key_type, value).await?;
         }
 
@@ -811,7 +805,7 @@ mod tests {
 
         assert_eq!(
             1,
-            wallet_state.generation_key_index(),
+            wallet_state.ephemeral_key_index(KeyType::Generation),
             "Key index must be 1 prior to handling of block"
         );
 
@@ -831,7 +825,7 @@ mod tests {
         assert_eq!(three_quarters, wallet_state.get_balance().await.unwrap());
         assert_eq!(
             2,
-            wallet_state.generation_key_index(),
+            wallet_state.ephemeral_key_index(KeyType::Generation),
             "Key index must be 2 after handling block, as key with index 1 got a UTXO in it"
         );
 
@@ -839,7 +833,7 @@ mod tests {
         let wallet_state_persisted1 = WalletState::new(config.clone(), &db_path).await.unwrap();
         assert_eq!(
             2,
-            wallet_state_persisted1.generation_key_index(),
+            wallet_state_persisted1.ephemeral_key_index(KeyType::Generation),
             "Persisted key index must match ephemeral key index"
         );
 
@@ -858,7 +852,7 @@ mod tests {
         );
         assert_eq!(
             3,
-            wallet_state.generation_key_index(),
+            wallet_state.ephemeral_key_index(KeyType::Generation),
             "Key index must be 3 after receiving UTXO to key with index 2"
         );
 
@@ -866,7 +860,7 @@ mod tests {
         let wallet_state_persisted2 = WalletState::new(config, &db_path).await.unwrap();
         assert_eq!(
             3,
-            wallet_state_persisted2.generation_key_index(),
+            wallet_state_persisted2.ephemeral_key_index(KeyType::Generation),
             "Persisted key index must match ephemeral key index"
         );
         let num_checked_addrs_after = wallet_state.get_future_spending_keys().len();
@@ -896,7 +890,7 @@ mod tests {
         let wallet_state = WalletState::new(config.clone(), &db_path).await.unwrap();
         assert_eq!(
             1,
-            wallet_state.symmetric_key_index(),
+            wallet_state.ephemeral_key_index(KeyType::Symmetric),
             "Key index must be 1 prior to handling of block"
         );
 
@@ -906,7 +900,7 @@ mod tests {
         wallet_state.update_new_tip(&block, false).await.unwrap();
         assert_eq!(
             5,
-            wallet_state.symmetric_key_index(),
+            wallet_state.ephemeral_key_index(KeyType::Symmetric),
             "Symmetric key index must be 5 after handling block, as key with index 4 got a UTXO in it"
         );
 
@@ -914,7 +908,7 @@ mod tests {
         let wallet_state_persisted = WalletState::new(config, &db_path).await.unwrap();
         assert_eq!(
             5,
-            wallet_state_persisted.symmetric_key_index(),
+            wallet_state_persisted.ephemeral_key_index(KeyType::Symmetric),
             "Persisted key index must match key index"
         );
         assert_eq!(
@@ -974,7 +968,7 @@ mod tests {
 
         assert_eq!(
             5,
-            wallet_state.symmetric_key_index(),
+            wallet_state.ephemeral_key_index(KeyType::Symmetric),
             "Symmetric key index must be 5 after handling block, as key with index 4 got a UTXO in it"
         );
     }
