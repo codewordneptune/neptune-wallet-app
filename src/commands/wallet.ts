@@ -1,3 +1,4 @@
+import { AddressRecord, NeptuneKeyType } from "@/utils/api/types";
 import { IncomingUtxoRecoveryData } from "@/utils/import-wallet-randomness";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -52,4 +53,8 @@ export async function importIncomingRandomness(
   payload: IncomingUtxoRecoveryData[]
 ): Promise<string> {
   return await invoke("import_incoming_randomness", { payload });
+}
+
+export async function knownAddresses(keyType: NeptuneKeyType): Promise<AddressRecord[]> {
+  return await invoke<AddressRecord[]>("known_addresses", { keyType });
 }

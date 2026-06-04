@@ -21,6 +21,7 @@ use axum_extra::response::ErasedJson;
 use block::get_tip_height;
 use error::RestError;
 use http::StatusCode;
+use neptune_cash::api::export::KeyType;
 use neptune_cash::api::export::NativeCurrencyAmount;
 use neptune_cash::api::export::ReceivingAddress;
 use neptune_cash::api::export::Timestamp;
@@ -43,6 +44,7 @@ use crate::config::consts::RPC_PORT;
 use crate::config::Config;
 use crate::service::get_state;
 use crate::wallet::balance::WalletHistory;
+use crate::wallet::keys::AddressRecord;
 use crate::wallet::sync::SyncState;
 use crate::wallet::sync::SyncStatus;
 use crate::wallet::InputSelectionRule;
@@ -177,6 +179,15 @@ pub(crate) trait WalletRpc {
         info!("Recovered: {recovered} NPT through imported randomness");
 
         Ok(recovered)
+    }
+
+    async fn known_addresses(key_type: KeyType) -> Result<Vec<AddressRecord>> {
+        let wallet = &get_state::<Arc<SyncState>>().wallet;
+        let addresses = wallet.known_addresses(key_type).await?;
+
+        debug!("Returning {} addresses of type {key_type}", addresses.len());
+
+        Ok(addresses)
     }
 
     async fn send_to_address(params: SendToAddressParams) -> Result<SendResponse, RestError> {

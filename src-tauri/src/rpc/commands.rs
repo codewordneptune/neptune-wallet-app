@@ -1,6 +1,7 @@
 use std::ops::Deref;
 use std::sync::Arc;
 
+use neptune_cash::api::export::KeyType;
 use neptune_cash::state::wallet::wallet_state::IncomingUtxoRecoveryData;
 use tracing::*;
 
@@ -19,6 +20,7 @@ use crate::rpc::WalletBalance;
 use crate::rpc::WalletRpc;
 use crate::rpc::WalletRpcImpl;
 use crate::wallet::balance::WalletHistory;
+use crate::wallet::keys::AddressRecord;
 use crate::wallet::sync::SyncState;
 use crate::wallet::sync::SyncStatus;
 
@@ -180,6 +182,13 @@ pub(crate) async fn import_incoming_randomness(
     info!("Received {} incoming UTXOs for processing.", payload.len());
 
     WalletRpcImpl::import_incoming_randomness(payload)
+        .await
+        .into_tauri_result()
+}
+
+#[cfg_attr(feature = "gui", tauri::command)]
+pub(crate) async fn known_addresses(key_type: KeyType) -> Result<Vec<AddressRecord>> {
+    WalletRpcImpl::known_addresses(key_type)
         .await
         .into_tauri_result()
 }

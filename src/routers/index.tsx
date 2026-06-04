@@ -1,4 +1,5 @@
 import {
+  IconAddressBook,
   IconDeviceImacUp,
   IconHistory,
   IconLayoutNavbarCollapse,
@@ -14,6 +15,7 @@ import AboutPage from "../pages/about";
 const WalletPage = lazy(async () => await import("../pages/wallet"));
 const SettingsPage = lazy(async () => await import("../pages/settings"));
 const LogPage = lazy(async () => await import("../pages/log"));
+const AddressesPage = lazy(async () => await import("../pages/addresses"));
 const HistoryPage = lazy(async () => await import("../pages/history"));
 const BatchPage = lazy(async () => await import("../pages/batch"));
 export const routesConfig: RouteObject[] = [
@@ -44,6 +46,10 @@ export const routesConfig: RouteObject[] = [
         element: <BatchPage />,
       },
       {
+        path: "addresses",
+        element: <AddressesPage />,
+      },
+      {
         path: "history",
         element: <HistoryPage />,
       },
@@ -62,6 +68,7 @@ export const routesConfig: RouteObject[] = [
 export const linkdata = [
   { label: "Wallet", href: "/wallet", icon: IconWallet },
   { label: "Send", href: "/send", icon: IconTransfer },
+  { label: "Addresses", href: "/addresses", icon: IconAddressBook },
   { label: "History", href: "/history", icon: IconHistory },
   {
     label: "Advanced",

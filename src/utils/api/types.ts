@@ -39,3 +39,15 @@ export interface SendInputItem {
   toAddress: string;
   amount: string;
 }
+
+// Match the exact PascalCase names of the Rust enum variants
+// Does not include symmetric addresses since they cannot be securely displayed.
+export type NeptuneKeyType = "Generation" | "ViewingAddress" | "EcHybrid";
+
+// Matches the Rust AddressRecord struct
+export interface AddressRecord {
+  key_index: number;
+  address: string;
+  address_short_form: string;
+  label?: string;
+}

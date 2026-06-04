@@ -4,13 +4,43 @@ use std::range::Range;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
+use anyhow::ensure;
 use anyhow::Result;
 use neptune_cash::api::export::KeyType;
+use neptune_cash::api::export::Network;
+use neptune_cash::api::export::ReceivingAddress;
 use neptune_cash::api::export::SpendingKey;
 use neptune_cash::api::export::SymmetricKey;
 use neptune_cash::api::export::WalletEntropy;
 use rayon::prelude::*;
+use serde::Serialize;
 use strum::IntoEnumIterator;
+
+/// Display information about an address
+#[derive(Debug, Serialize)]
+pub(crate) struct AddressRecord {
+    pub key_index: i32,
+    pub address: String,
+    pub address_short_form: String,
+    pub label: Option<String>,
+}
+
+impl AddressRecord {
+    fn new(
+        receiving_address: ReceivingAddress,
+        key_index: i32,
+        network: Network,
+        label: Option<String>,
+    ) -> Self {
+        let address_short_form = receiving_address.to_bech32m_abbreviated(network).unwrap();
+        Self {
+            key_index,
+            address: receiving_address.to_bech32m(network).unwrap(),
+            address_short_form,
+            label,
+        }
+    }
+}
 
 impl super::WalletState {
     pub(crate) async fn get_address(&self, index: u64) -> Result<String> {
@@ -18,6 +48,41 @@ impl super::WalletState {
         let spending_key = SpendingKey::from(symmetric_key);
 
         spending_key.to_address().to_bech32m(self.network)
+    }
+
+    /// Return all addresses of the specified type, except for symmetric
+    /// addresses.
+    ///
+    /// Returns an error if called with the key type of symmetric addresses
+    /// since these cannot be presented in a secure manner, at the time of
+    /// writing.
+    pub(crate) async fn known_addresses(&self, key_type: KeyType) -> Result<Vec<AddressRecord>> {
+        ensure!(
+            key_type != KeyType::Symmetric,
+            "Symmetric keys cannot be shown in a secure manner"
+        );
+
+        // Key index represents the *next* address to be derived.
+        let key_index = self.ephemeral_key_index(key_type);
+        ensure!(
+            key_index <= i32::MAX as u64,
+            "Key index cannot exceed i32::MAX"
+        );
+        let range = Range {
+            start: 0,
+            end: key_index,
+        };
+        let keys = self.keys(range, key_type);
+        let addresses = keys.into_iter().map(|(idx, x)| (idx, x.to_address()));
+
+        // Above cap on key index guarantees that this unwrap can never panic.
+        let addresses = addresses
+            .map(|(idx, addr)| {
+                AddressRecord::new(addr, idx.try_into().unwrap(), self.network, None)
+            })
+            .collect();
+
+        Ok(addresses)
     }
 
     /// Return all known spending keys.
