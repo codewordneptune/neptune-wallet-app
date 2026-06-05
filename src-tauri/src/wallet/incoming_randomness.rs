@@ -329,7 +329,7 @@ mod tests {
         assert_eq!(1, wallet.ephemeral_key_index(KeyType::ViewingAddress));
 
         // Verify known (not future) keys after
-        let known_keys = wallet.get_known_spending_keys();
+        let known_keys = wallet.all_known_keys();
         assert_eq!(
             3,
             known_keys

@@ -224,6 +224,7 @@ impl WalletState {
         Ok(())
     }
 
+    /// Update both the ephemeral and the persisted key index
     pub(crate) async fn set_key_index(&self, key_type: KeyType, value: u64) -> Result<()> {
         let db_id = Self::db_id(key_type);
         trace!("setting {db_id} key index to: {value}");
@@ -235,15 +236,8 @@ impl WalletState {
             .execute(&self.pool)
             .await?;
 
-        match key_type {
-            KeyType::Generation => self.generation_key_index.store(value, Ordering::Relaxed),
-            KeyType::Symmetric => self.symmetric_key_index.store(value, Ordering::Relaxed),
-            KeyType::EcHybrid => self.ec_hybrid_key_index.store(value, Ordering::Relaxed),
-            KeyType::ViewingAddress => self
-                .viewing_address_key_index
-                .store(value, Ordering::Relaxed),
-            _ => todo!(),
-        }
+        self.set_ephemeral_key_index(key_type, value, Ordering::Relaxed);
+
         Ok(())
     }
 

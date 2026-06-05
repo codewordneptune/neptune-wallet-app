@@ -58,3 +58,7 @@ export async function importIncomingRandomness(
 export async function knownAddresses(keyType: NeptuneKeyType): Promise<AddressRecord[]> {
   return await invoke<AddressRecord[]>("known_addresses", { keyType });
 }
+
+export async function generateNewAddress(keyType: NeptuneKeyType): Promise<AddressRecord> {
+  return await invoke<AddressRecord>("generate_new_address", { keyType });
+}

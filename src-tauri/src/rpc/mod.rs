@@ -118,7 +118,7 @@ pub(crate) trait WalletRpc {
     }
     async fn current_wallet_address(index: u64) -> Result<String, RestError> {
         let wallet = &get_state::<Arc<SyncState>>().wallet;
-        let address = wallet.get_address(index).await?;
+        let address = wallet.get_address(KeyType::Generation, index).await?;
         Ok(address)
     }
     async fn history() -> Result<Vec<WalletHistory>, RestError> {
@@ -183,11 +183,19 @@ pub(crate) trait WalletRpc {
 
     async fn known_addresses(key_type: KeyType) -> Result<Vec<AddressRecord>> {
         let wallet = &get_state::<Arc<SyncState>>().wallet;
-        let addresses = wallet.known_addresses(key_type).await?;
+        let addresses = wallet.known_addresses(key_type)?;
 
         debug!("Returning {} addresses of type {key_type}", addresses.len());
 
         Ok(addresses)
+    }
+
+    async fn generate_new_address(key_type: KeyType) -> Result<AddressRecord> {
+        let wallet = &get_state::<Arc<SyncState>>().wallet;
+
+        let address = wallet.generate_new_address(key_type).await?;
+
+        Ok(address)
     }
 
     async fn send_to_address(params: SendToAddressParams) -> Result<SendResponse, RestError> {

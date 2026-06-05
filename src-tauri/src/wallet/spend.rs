@@ -197,7 +197,7 @@ impl super::WalletState {
     }
 
     fn can_unlock(&self, utxo: &Utxo) -> bool {
-        self.get_known_spending_keys()
+        self.all_known_keys()
             .iter()
             .find(|k| k.lock_script_hash() == utxo.lock_script_hash())
             .is_some()

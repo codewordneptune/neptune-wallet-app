@@ -63,6 +63,7 @@ fn add_commands<R: tauri::Runtime>(invoke: tauri::ipc::Invoke<R>) -> bool {
         rpc::commands::wallet_balance,
         rpc::commands::import_incoming_randomness,
         rpc::commands::known_addresses,
+        rpc::commands::generate_new_address,
         os::is_win11,
         os::os_info,
         os::platform,

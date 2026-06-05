@@ -229,7 +229,7 @@ impl super::WalletState {
     // returns Some(SpendingKey) if the utxo can be unlocked by one of the known
     // wallet keys.
     pub(crate) fn find_spending_key_for_utxo(&self, utxo: &Utxo) -> Option<SpendingKey> {
-        self.get_known_spending_keys()
+        self.all_known_keys()
             .into_iter()
             .find(|k| k.lock_script_hash() == utxo.lock_script_hash())
     }

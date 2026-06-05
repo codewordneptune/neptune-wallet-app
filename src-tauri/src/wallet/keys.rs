@@ -1,3 +1,4 @@
+use core::sync;
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::range::Range;
@@ -11,13 +12,12 @@ use neptune_cash::api::export::Network;
 use neptune_cash::api::export::ReceivingAddress;
 use neptune_cash::api::export::SpendingKey;
 use neptune_cash::api::export::SymmetricKey;
-use neptune_cash::api::export::WalletEntropy;
 use rayon::prelude::*;
 use serde::Serialize;
 use strum::IntoEnumIterator;
 
 /// Display information about an address
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 pub(crate) struct AddressRecord {
     pub key_index: i32,
     pub address: String,
@@ -43,11 +43,10 @@ impl AddressRecord {
 }
 
 impl super::WalletState {
-    pub(crate) async fn get_address(&self, index: u64) -> Result<String> {
-        let symmetric_key = self.key.nth_generation_spending_key(index);
-        let spending_key = SpendingKey::from(symmetric_key);
+    pub(crate) async fn get_address(&self, key_type: KeyType, index: u64) -> Result<String> {
+        let key = self.nth_spending_key(key_type, index);
 
-        spending_key.to_address().to_bech32m(self.network)
+        key.to_address().to_bech32m(self.network)
     }
 
     /// Return all addresses of the specified type, except for symmetric
@@ -56,7 +55,7 @@ impl super::WalletState {
     /// Returns an error if called with the key type of symmetric addresses
     /// since these cannot be presented in a secure manner, at the time of
     /// writing.
-    pub(crate) async fn known_addresses(&self, key_type: KeyType) -> Result<Vec<AddressRecord>> {
+    pub(crate) fn known_addresses(&self, key_type: KeyType) -> Result<Vec<AddressRecord>> {
         ensure!(
             key_type != KeyType::Symmetric,
             "Symmetric keys cannot be shown in a secure manner"
@@ -85,20 +84,58 @@ impl super::WalletState {
         Ok(addresses)
     }
 
+    /// Add a new address of the specified type to the wallet, and return the
+    /// newly added address.
+    ///
+    /// All incoming UTXOs to the newly added address will be tracked by the
+    /// wallet. Returns an error if called with the key type of symmetric
+    /// addresses since these cannot be presented in a secure manner and they
+    /// really shouldn't be used at all. This wallet does not condone, or
+    /// support the generation of new symmetric addresses.
+    pub(crate) async fn generate_new_address(&self, key_type: KeyType) -> Result<AddressRecord> {
+        ensure!(
+            key_type != KeyType::Symmetric,
+            "Symmetric keys should not be used"
+        );
+
+        // Key index represents the *next* address to be derived.
+        let key_index = self.ephemeral_key_index(key_type);
+        ensure!(
+            key_index <= i32::MAX as u64,
+            "Key index cannot exceed i32::MAX"
+        );
+
+        let new_adress = self.nth_spending_key(key_type, key_index).to_address();
+        self.set_key_index(key_type, key_index.saturating_add(1))
+            .await?;
+
+        Ok(AddressRecord::new(
+            new_adress,
+            key_index.try_into().unwrap(),
+            self.network,
+            None,
+        ))
+    }
+
     /// Return all known spending keys.
     ///
     /// Will always return at least one key per type.
-    pub(crate) fn get_known_spending_keys(&self) -> Vec<SpendingKey> {
+    pub(crate) fn all_known_keys(&self) -> Vec<SpendingKey> {
         let mut all_keys = vec![];
         for key_type in KeyType::iter() {
-            let end = self.ephemeral_key_index(key_type);
-            let range = Range { start: 0, end };
-            let keys = self.keys(range, key_type);
-
-            all_keys.extend(keys);
+            all_keys.extend(self.known_keys(key_type));
         }
 
         all_keys.iter().map(|v| v.1.deref().clone()).collect()
+    }
+
+    /// Return all known keys of that type.
+    ///
+    /// Will always return at least one key.
+    fn known_keys(&self, key_type: KeyType) -> Vec<(u64, Arc<SpendingKey>)> {
+        let end = self.ephemeral_key_index(key_type);
+        let range = Range { start: 0, end };
+        self.keys(range, key_type)
     }
 
     /// Return all tracked keys, and all future keys up the specified
@@ -124,6 +161,21 @@ impl super::WalletState {
         }
 
         all_keys
+    }
+
+    pub(crate) fn set_ephemeral_key_index(
+        &self,
+        key_type: KeyType,
+        val: u64,
+        order: sync::atomic::Ordering,
+    ) {
+        match key_type {
+            KeyType::Generation => self.generation_key_index.store(val, order),
+            KeyType::Symmetric => self.symmetric_key_index.store(val, order),
+            KeyType::EcHybrid => self.ec_hybrid_key_index.store(val, order),
+            KeyType::ViewingAddress => self.viewing_address_key_index.store(val, order),
+            _ => todo!(),
+        }
     }
 
     pub(crate) fn ephemeral_key_index(&self, key_type: KeyType) -> u64 {
@@ -163,27 +215,6 @@ impl super::WalletState {
         range: Range<u64>,
         key_type: KeyType,
     ) -> Vec<(u64, Arc<SpendingKey>)> {
-        // TODO: Replace with same function in neptune-core, once available
-        // (anything after v0.11.0 should have this functionality).
-        /// Return the nth spending key, of the specified type.
-        fn nth_spending_key(
-            wallet_entropy: &WalletEntropy,
-            key_type: KeyType,
-            derivation_index: u64,
-        ) -> SpendingKey {
-            match key_type {
-                KeyType::Generation => wallet_entropy
-                    .nth_generation_spending_key(derivation_index)
-                    .into(),
-                KeyType::Symmetric => wallet_entropy.nth_symmetric_key(derivation_index).into(),
-                KeyType::EcHybrid => wallet_entropy.nth_ec_hybrid_key(derivation_index).into(),
-                KeyType::ViewingAddress => wallet_entropy
-                    .nth_viewing_address_key(derivation_index)
-                    .into(),
-                _ => todo!("Only known key types are supported"),
-            }
-        }
-
         let entropy = &self.key;
 
         let mut keys: Vec<_> = (range.start..range.end)
@@ -192,7 +223,7 @@ impl super::WalletState {
                 if let Some(key) = self.key_cache.get_key(key_type, i) {
                     return (i, key);
                 }
-                let new_key = Arc::new(nth_spending_key(entropy, key_type, i));
+                let new_key = Arc::new(self.nth_spending_key(key_type, i));
                 self.key_cache.add_key(i, new_key.clone());
                 (i, new_key)
             })
@@ -213,6 +244,24 @@ impl super::WalletState {
 
         keys
     }
+
+    // TODO: Replace with same function in neptune-core, once available
+    // (anything after v0.11.0 should have this functionality).
+    /// Return the nth spending key, of the specified type.
+    fn nth_spending_key(&self, key_type: KeyType, derivation_index: u64) -> SpendingKey {
+        let wallet_entropy = &self.key;
+        match key_type {
+            KeyType::Generation => wallet_entropy
+                .nth_generation_spending_key(derivation_index)
+                .into(),
+            KeyType::Symmetric => wallet_entropy.nth_symmetric_key(derivation_index).into(),
+            KeyType::EcHybrid => wallet_entropy.nth_ec_hybrid_key(derivation_index).into(),
+            KeyType::ViewingAddress => wallet_entropy
+                .nth_viewing_address_key(derivation_index)
+                .into(),
+            _ => todo!("Only known key types are supported"),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -224,7 +273,7 @@ mod tests {
     #[tokio::test]
     async fn looks_ahead_right_number_of_addresses() {
         let wallet_state = test_devnet_wallet().await;
-        let num_known_keys = wallet_state.get_known_spending_keys().len();
+        let num_known_keys = wallet_state.all_known_keys().len();
         let num_known_and_future: usize = wallet_state
             .known_and_future_keys()
             .values()
@@ -241,9 +290,32 @@ mod tests {
     #[tokio::test]
     async fn knows_one_key_per_key_type_at_init() {
         let wallet_state = test_devnet_wallet().await;
-        assert_eq!(
-            KeyType::iter().count(),
-            wallet_state.get_known_spending_keys().len()
-        );
+        assert_eq!(KeyType::iter().count(), wallet_state.all_known_keys().len());
+    }
+
+    #[tokio::test]
+    async fn generate_new_address_consistency() {
+        let wallet_state = test_devnet_wallet().await;
+
+        for key_type in KeyType::iter() {
+            if key_type == KeyType::Symmetric {
+                continue;
+            }
+
+            let addresses_before = wallet_state.known_addresses(key_type).unwrap();
+
+            let mut generated_addresses = vec![];
+            for _ in 0..6 {
+                generated_addresses
+                    .push(wallet_state.generate_new_address(key_type).await.unwrap());
+            }
+
+            let addresses_after = wallet_state.known_addresses(key_type).unwrap();
+
+            assert_eq!(
+                addresses_after,
+                [addresses_before, generated_addresses].concat()
+            )
+        }
     }
 }

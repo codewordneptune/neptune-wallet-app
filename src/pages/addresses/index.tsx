@@ -1,8 +1,9 @@
-import { knownAddresses } from "@/commands/wallet";
+import { generateNewAddress, knownAddresses } from "@/commands/wallet";
 import { AddressRecord, NeptuneKeyType } from "@/utils/api/types";
 import {
   ActionIcon,
   Box,
+  Button,
   Center,
   CopyButton,
   Flex,
@@ -11,11 +12,12 @@ import {
   ScrollArea,
   Table,
   Tabs,
+  Text,
   Title,
   Tooltip,
 } from "@mantine/core";
-import { IconCheck, IconCopy } from "@tabler/icons-react";
-import { useEffect, useState } from "react";
+import { IconCheck, IconCopy, IconPlus } from "@tabler/icons-react";
+import { useCallback, useEffect, useState } from "react";
 
 const generation_tab = "generation";
 const viewing_tab = "viewing";
@@ -25,32 +27,63 @@ export default function AddressesPage() {
   const [activeTab, setActiveTab] = useState<string | null>(generation_tab);
   const [addresses, setAddresses] = useState<AddressRecord[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isGenerating, setIsGenerating] = useState<boolean>(false);
 
-  // This hook runs every time the `activeTab` changes
-  useEffect(() => {
-    async function fetchAddresses() {
-      if (!activeTab) return;
+  const BUTTON_LABELS: Record<string, string> = {
+    [generation_tab]: "New Generation Address",
+    [ec_hybrid_tab]: "New EC Hybrid Address",
+    [viewing_tab]: "New Viewing Address",
+  };
 
-      setIsLoading(true);
+  const ADDRESS_DESCRIPTIONS: Record<string, string> = {
+    [generation_tab]:
+      "Generation addresses: Will not leak privacy if you reuse it and share it with multiple people.",
+    [ec_hybrid_tab]:
+      "EC hybrid addresses: It's recommended to only share each address with one other party. Otherwise, an attacker with a powerful quantum computer might expose (but not steal) your incoming transactions.",
+    [viewing_tab]:
+      "Viewing address: Only share each address with one other party. Anyone seeing one of your addresses can see anything that address has ever received.",
+  };
 
-      try {
-        let keyType: NeptuneKeyType = "Generation";
-        if (activeTab === ec_hybrid_tab) keyType = "EcHybrid";
-        if (activeTab === viewing_tab) keyType = "ViewingAddress";
+  const keyTypeFromTab = (tab: string | null): NeptuneKeyType => {
+    if (tab === ec_hybrid_tab) return "EcHybrid";
+    if (tab === viewing_tab) return "ViewingAddress";
+    return "Generation";
+  };
 
-        const data = await knownAddresses(keyType);
-
-        setAddresses(data);
-      } catch (error) {
-        console.error("Failed to fetch addresses from backend:", error);
-        // Optionally, handle error state here (e.g., setAddresses([]), show a notification)
-      } finally {
-        setIsLoading(false);
-      }
+  const fetchAddresses = useCallback(async () => {
+    if (!activeTab) return;
+    setIsLoading(true);
+    try {
+      const keyType = keyTypeFromTab(activeTab);
+      const data = await knownAddresses(keyType);
+      setAddresses(data);
+    } catch (error) {
+      console.error("Failed to fetch addresses from backend:", error);
+    } finally {
+      setIsLoading(false);
     }
+  }, [activeTab]);
 
+  useEffect(() => {
     fetchAddresses();
-  }, [activeTab]); // The dependency array ensures this runs when activeTab changes
+  }, [fetchAddresses]);
+
+  // Handler for the generate button
+  const handleGenerate = async () => {
+    if (!activeTab) return;
+    setIsGenerating(true);
+    try {
+      const keyType = keyTypeFromTab(activeTab);
+      const newAddress = await generateNewAddress(keyType);
+
+      // Append the new address to the existing list without needing a full refetch
+      setAddresses((prev) => [...prev, newAddress]);
+    } catch (error) {
+      console.error("Failed to generate new address:", error);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
 
   const addressRepresentation = (address: AddressRecord): string =>
     activeTab === generation_tab ? address.address_short_form : address.address;
@@ -73,6 +106,10 @@ export default function AddressesPage() {
       );
     }
 
+    // Sort the data in reverse chronological order, showing the address with
+    // the highest index first.
+    const sortedData = [...data].sort((a, b) => b.key_index - a.key_index);
+
     return (
       <ScrollArea h="calc(100vh - 220px)" type="auto" offsetScrollbars>
         <Table verticalSpacing="sm" striped highlightOnHover>
@@ -93,7 +130,7 @@ export default function AddressesPage() {
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
-            {data.map((item) => (
+            {sortedData.map((item) => (
               <Table.Tr key={item.key_index}>
                 <Table.Td>{item.key_index}</Table.Td>
                 <Table.Td>
@@ -124,11 +161,9 @@ export default function AddressesPage() {
 
   return (
     <Box p="md">
-      <Flex justify="space-between" align="center" mb="lg">
-        <Title order={2} fw={500}>
-          Addresses
-        </Title>
-      </Flex>
+      <Title order={2} fw={500}>
+        Addresses
+      </Title>
 
       <Paper withBorder radius="md" p="md">
         <Tabs value={activeTab} onChange={setActiveTab}>
@@ -139,6 +174,20 @@ export default function AddressesPage() {
           </Tabs.List>
 
           <Tabs.Panel value={activeTab || generation_tab}>
+            <Flex justify="space-between" align="center" mb="sm" wrap="wrap" gap="sm">
+              <Text c="dimmed" size="sm" style={{ flex: 1 }}>
+                {activeTab ? ADDRESS_DESCRIPTIONS[activeTab] : ""}
+              </Text>
+
+              <Button
+                leftSection={<IconPlus size={15} />}
+                onClick={handleGenerate}
+                loading={isGenerating}
+              >
+                {activeTab ? BUTTON_LABELS[activeTab] : "Generate New Address"}
+              </Button>
+            </Flex>
+
             <AddressTable data={addresses} />
           </Tabs.Panel>
         </Tabs>

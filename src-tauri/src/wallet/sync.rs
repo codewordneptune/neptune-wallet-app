@@ -361,7 +361,7 @@ impl SyncState {
         // Do some heuristics to attempt to only do this check once per wallet.
         let start = self.wallet.start_height().await?;
         let utxos = if 0 == start && self.wallet.expected_utxos().await?.is_empty() {
-            let premine_keys = self.wallet.get_known_spending_keys();
+            let premine_keys = self.wallet.all_known_keys();
             Self::check_premine_inner(self.wallet.network, &premine_keys)
         } else {
             vec![]

@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
+use neptune_cash::api::export::KeyType;
 use neptune_cash::api::export::Network;
 
 use crate::config::wallet::ScanConfig;
@@ -191,7 +192,11 @@ pub(crate) async fn wallet_address(index: u64) -> Result<String> {
     )
     .await;
     let state = state.expect("State fetch of 'Arc<SyncState>' for wallet_address must work.");
-    state.wallet.get_address(index).await.into_tauri_result()
+    state
+        .wallet
+        .get_address(KeyType::Generation, index)
+        .await
+        .into_tauri_result()
 }
 
 #[cfg_attr(feature = "gui", tauri::command)]

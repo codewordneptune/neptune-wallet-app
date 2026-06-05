@@ -157,22 +157,10 @@ impl WalletState {
         };
 
         state.migrate_tables().await.context("migrate_tables")?;
-        state.generation_key_index.store(
-            state.persisted_key_index(KeyType::Generation).await?,
-            Ordering::Relaxed,
-        );
-        state.symmetric_key_index.store(
-            state.persisted_key_index(KeyType::Symmetric).await?,
-            Ordering::Relaxed,
-        );
-        state.ec_hybrid_key_index.store(
-            state.persisted_key_index(KeyType::EcHybrid).await?,
-            Ordering::Relaxed,
-        );
-        state.viewing_address_key_index.store(
-            state.persisted_key_index(KeyType::ViewingAddress).await?,
-            Ordering::Relaxed,
-        );
+        for key_type in KeyType::iter() {
+            let val = state.persisted_key_index(key_type).await?;
+            state.set_ephemeral_key_index(key_type, val, Ordering::Relaxed);
+        }
 
         debug!("Wallet state initialized");
 
@@ -766,7 +754,7 @@ mod tests {
         let wallet_state = WalletState::new(config, &db_path).await.unwrap();
 
         println!("Known addresses:");
-        for key in wallet_state.get_known_spending_keys() {
+        for key in wallet_state.all_known_keys() {
             println!("{}", key.to_address().to_display_bech32m(network).unwrap());
             println!(
                 "receiver ID: {}; privacy_preimage: {}",
@@ -981,7 +969,7 @@ mod tests {
 
         let genesis: RpcWalletBlock = (&Block::genesis(network)).into();
         let genesis: WalletBlock = genesis.into();
-        let premine_keys = wallet_state.get_known_spending_keys();
+        let premine_keys = wallet_state.all_known_keys();
         println!("Num premine keys: {}", premine_keys.len());
 
         let expected_utxos = SyncState::check_premine_for_tests(network, &premine_keys);

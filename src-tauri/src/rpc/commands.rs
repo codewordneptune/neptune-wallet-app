@@ -192,3 +192,10 @@ pub(crate) async fn known_addresses(key_type: KeyType) -> Result<Vec<AddressReco
         .await
         .into_tauri_result()
 }
+
+#[cfg_attr(feature = "gui", tauri::command)]
+pub(crate) async fn generate_new_address(key_type: KeyType) -> Result<AddressRecord> {
+    WalletRpcImpl::generate_new_address(key_type)
+        .await
+        .into_tauri_result()
+}
