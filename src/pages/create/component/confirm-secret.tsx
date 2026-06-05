@@ -46,64 +46,50 @@ export default function ConfirmSecret(props: Props) {
   }, [numbers, mnemonic]);
 
   function generateRandomWords() {
-    let words = [] as string[];
-    let mnemonicList = mnemonic.split(" ");
-    let newMnemonicList = [] as string[];
-    numbers.forEach((item) => {
-      let findWord = mnemonicList.find((item2, index2) => index2 == item);
-      if (findWord) {
-        words.push(findWord);
-      }
-    });
+    const mnemonicList = mnemonic.split(" ");
+
+    const words = numbers.map((num) => mnemonicList[num]);
+
     // Fisher-Yates shuffle algorithm
     for (let i = words.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [words[i], words[j]] = [words[j], words[i]];
     }
-    mnemonicList.forEach((item, index) => {
-      const exists = numbers.includes(index); // true
-      let word = item;
-      if (exists) {
-        word = "";
-      }
-      newMnemonicList.push(word);
+
+    // Create the verification layout
+    const newMnemonicList = mnemonicList.map((item, index) => {
+      return numbers.includes(index) ? "" : item;
     });
+
     setVverifyWords(newMnemonicList);
     setInputWords(words);
   }
 
-  function selecteWord(index: number, word: string) {
-    let newInputWords = [] as string[];
-    let newVerifyWords = [] as string[];
-    inputWords.forEach((item) => {
-      if (item != word) {
-        newInputWords.push(item);
-      }
-    });
+  function selecteWord(selectedIndex: number, word: string) {
+    // 1. Filter by index to ensure ONLY the clicked duplicate is removed
+    const newInputWords = inputWords.filter((_, index) => index !== selectedIndex);
+
+    // 2. Add the word to the first empty slot in verifyWords
     let addOne = false;
-    verifyWords.forEach((item) => {
-      if (!addOne) {
-        if (item === "") {
-          addOne = true;
-          item = word;
-        }
+    const newVerifyWords = verifyWords.map((item) => {
+      if (!addOne && item === "") {
+        addOne = true;
+        return word;
       }
-      newVerifyWords.push(item);
+      return item;
     });
+
     setVverifyWords(newVerifyWords);
     setInputWords(newInputWords);
   }
 
   function removeWord(index: number, word: string) {
-    let newInputWords = [] as string[];
-    let newVerifyWords = [] as string[];
-    verifyWords.forEach((item, itemIndex) => {
-      if (index == itemIndex) {
-        item = "";
-      }
-      newVerifyWords.push(item);
+    const newVerifyWords = verifyWords.map((item, itemIndex) => {
+      return index === itemIndex ? "" : item;
     });
-    newInputWords = [...inputWords, word];
+
+    const newInputWords = [...inputWords, word];
+
     setVverifyWords(newVerifyWords);
     setInputWords(newInputWords);
   }
