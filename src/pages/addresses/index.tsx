@@ -7,7 +7,9 @@ import {
   Center,
   CopyButton,
   Flex,
+  Group,
   Loader,
+  Modal,
   Paper,
   ScrollArea,
   Table,
@@ -16,18 +18,25 @@ import {
   Title,
   Tooltip,
 } from "@mantine/core";
-import { IconCheck, IconCopy, IconPlus } from "@tabler/icons-react";
+import { useDisclosure } from "@mantine/hooks";
+import { IconCheck, IconCopy, IconPlus, IconQrcode } from "@tabler/icons-react";
+import { QRCodeSVG } from "qrcode.react";
 import { useCallback, useEffect, useState } from "react";
 
 const generation_tab = "generation";
 const viewing_tab = "viewing";
 const ec_hybrid_tab = "echybrid";
+const uri_scheme_prefix = "NPT";
 
 export default function AddressesPage() {
   const [activeTab, setActiveTab] = useState<string | null>(generation_tab);
   const [addresses, setAddresses] = useState<AddressRecord[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
+
+  // State for managing the QR modal
+  const [qrModalOpened, { open: openQrModal, close: closeQrModal }] = useDisclosure(false);
+  const [selectedAddress, setSelectedAddress] = useState("");
 
   const BUTTON_LABELS: Record<string, string> = {
     [generation_tab]: "New Generation Address",
@@ -43,6 +52,8 @@ export default function AddressesPage() {
     [viewing_tab]:
       "Viewing address: Only share each address with one other party. Anyone seeing one of your addresses can see anything that address has ever received.",
   };
+
+  const getQrPayload = (address: string) => `${uri_scheme_prefix}:${address.toUpperCase()}`;
 
   const keyTypeFromTab = (tab: string | null): NeptuneKeyType => {
     if (tab === ec_hybrid_tab) return "EcHybrid";
@@ -84,6 +95,69 @@ export default function AddressesPage() {
       setIsGenerating(false);
     }
   };
+
+  // QR codes are only available for EC hybrid and viewing keys
+  const has_qr_codes = activeTab == ec_hybrid_tab || activeTab == viewing_tab;
+  const qr_button = (item: AddressRecord) => {
+    return (
+      has_qr_codes && (
+        <Tooltip label="Show QR Code" withArrow position="top">
+          <ActionIcon
+            color="blue"
+            variant="subtle"
+            onClick={() => {
+              setSelectedAddress(item.address);
+              openQrModal();
+            }}
+          >
+            <IconQrcode size={16} />
+          </ActionIcon>
+        </Tooltip>
+      )
+    );
+  };
+
+  const qr_modal = has_qr_codes && (
+    <Modal
+      opened={qrModalOpened}
+      onClose={closeQrModal}
+      title="Receive Funds"
+      centered
+      overlayProps={{ backgroundOpacity: 0.5, blur: 4 }}
+    >
+      <Box
+        style={{ display: "flex", flexDirection: "column", alignItems: "center", padding: "10px" }}
+      >
+        {selectedAddress && (
+          <>
+            {/* level="L" keeps the grid low-density.
+                marginSize={4} creates the required quiet zone.
+              */}
+            <QRCodeSVG
+              value={getQrPayload(selectedAddress)}
+              level="L"
+              size={256}
+              marginSize={4}
+              bgColor="#ffffff"
+              fgColor="#000000"
+            />
+
+            <Text mt="xl" size="sm" fw={500}>
+              Address
+            </Text>
+            <Text
+              ta="center"
+              size="xs"
+              c="dimmed"
+              style={{ wordBreak: "break-all", marginTop: "4px" }}
+            >
+              {selectedAddress}
+            </Text>
+          </>
+        )}
+      </Box>
+    </Modal>
+  );
 
   const addressRepresentation = (address: AddressRecord): string =>
     activeTab === generation_tab ? address.address_short_form : address.address;
@@ -136,20 +210,26 @@ export default function AddressesPage() {
                 <Table.Td>
                   <Box style={{ wordBreak: "break-all" }}>{addressRepresentation(item)}</Box>
                 </Table.Td>
-                <Table.Td ta="right">
-                  <CopyButton value={item.address} timeout={2000}>
-                    {({ copied, copy }) => (
-                      <Tooltip label={copied ? "Copied" : "Copy"} withArrow position="right">
-                        <ActionIcon
-                          color={copied ? "teal" : "gray"}
-                          variant="subtle"
-                          onClick={copy}
-                        >
-                          {copied ? <IconCheck size={16} /> : <IconCopy size={16} />}
-                        </ActionIcon>
-                      </Tooltip>
-                    )}
-                  </CopyButton>
+                <Table.Td>
+                  <Group gap="xs" justify="flex-end" wrap="nowrap">
+                    {/* QR button */}
+                    {qr_button(item)}
+
+                    {/* Copy Button */}
+                    <CopyButton value={item.address} timeout={2000}>
+                      {({ copied, copy }) => (
+                        <Tooltip label={copied ? "Copied" : "Copy"} withArrow position="top">
+                          <ActionIcon
+                            color={copied ? "teal" : "gray"}
+                            variant="subtle"
+                            onClick={copy}
+                          >
+                            {copied ? <IconCheck size={16} /> : <IconCopy size={16} />}
+                          </ActionIcon>
+                        </Tooltip>
+                      )}
+                    </CopyButton>
+                  </Group>
                 </Table.Td>
               </Table.Tr>
             ))}
@@ -164,6 +244,8 @@ export default function AddressesPage() {
       <Title order={2} fw={500}>
         Addresses
       </Title>
+
+      {qr_modal}
 
       <Paper withBorder radius="md" p="md">
         <Tabs value={activeTab} onChange={setActiveTab}>
