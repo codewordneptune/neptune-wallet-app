@@ -31,7 +31,7 @@ export default function CreateWallet({
     setVisibleMnemonic(true);
     setTimeout(() => {
       setVisibleMnemonic(false);
-    }, 5000);
+    }, 50000);
   }
 
   useEffect(() => {

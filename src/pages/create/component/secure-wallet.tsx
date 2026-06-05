@@ -23,7 +23,7 @@ export default function SecureWallet(props: Props) {
     setVisibleMnemonic(true);
     setTimeout(() => {
       setVisibleMnemonic(false);
-    }, 5000);
+    }, 50000);
   }
 
   return (
