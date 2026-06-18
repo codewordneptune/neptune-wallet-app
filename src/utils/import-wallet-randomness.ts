@@ -1,7 +1,7 @@
 import { importIncomingRandomness } from "@/commands/wallet";
+import { notifications } from "@mantine/notifications";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readTextFile } from "@tauri-apps/plugin-fs";
-import { notifications } from "@mantine/notifications";
 
 export interface IncomingUtxoRecoveryData {
   utxo: any;
@@ -62,8 +62,8 @@ export async function handleImportRandomness(): Promise<void> {
         message: "Did not manage to recover any funds. Check the log for details.",
         autoClose: false,
         withCloseButton: true,
-      })}
-
+      });
+    }
   } catch (error: any) {
     console.error("Failed to import randomness:", error);
 
