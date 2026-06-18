@@ -1,6 +1,7 @@
 import { importIncomingRandomness } from "@/commands/wallet";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readTextFile } from "@tauri-apps/plugin-fs";
+import { notifications } from "@mantine/notifications";
 
 export interface IncomingUtxoRecoveryData {
   utxo: any;
@@ -36,14 +37,42 @@ export async function handleImportRandomness(): Promise<void> {
       .filter((line) => line.trim() !== "") // Ignore empty lines (prevents JSON syntax errors)
       .map((line) => JSON.parse(line)); // Parse each individual line into an object
 
-    console.log("Successfully imported randomness:", parsedData);
+    console.log("Successfully parsed randomness:", parsedData);
 
-    // 4. Pass the data back to your Rust backend for processing
-    const _res = await importIncomingRandomness(parsedData);
+    // 4. Pass the data Rust backend for processing
+    const recoveredAmountStr = await importIncomingRandomness(parsedData);
+    const recoveredAmount = Number(recoveredAmountStr);
 
-    // TODO: Add a Mantine Notification here for success!
-  } catch (error) {
+    if (recoveredAmount > 0) {
+      // Success Notification (Positive Amount)
+      notifications.show({
+        position: "top-center",
+        color: "green",
+        title: "Import Successful",
+        message: `Successfully imported ${parsedData.length} records. Recovered amount: ${recoveredAmountStr} NPT.`,
+        autoClose: false,
+        withCloseButton: true,
+      });
+    } else {
+      // Warning Notification (Zero Amount)
+      notifications.show({
+        position: "top-center",
+        color: "yellow",
+        title: "No Funds Recovered",
+        message: "Did not manage to recover any funds. Check the log for details.",
+        autoClose: false,
+        withCloseButton: true,
+      })}
+
+  } catch (error: any) {
     console.error("Failed to import randomness:", error);
-    // TODO: Add a Mantine Notification here for the error
+
+    // Error Notification
+    notifications.show({
+      position: "top-center",
+      color: "red",
+      title: "Failed to import randomness. Check the log for details.",
+      message: error?.message || error || "An unexpected error occurred while reading the file.",
+    });
   }
 }
