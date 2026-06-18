@@ -244,9 +244,16 @@ impl WalletState {
         for incoming in incoming_utxos {
             let index_set = incoming.abs_i();
 
-            let msmps_recovery_data = rpc_client::node_rpc_client()
+            let aocl_index = incoming.aocl_index;
+            let msmps_recovery_data = match rpc_client::node_rpc_client()
                 .restore_msmps(vec![index_set])
-                .await?;
+                .await {
+                    Ok(msmp) => msmp,
+                    Err(_) => {
+                        warn!("Failed to restore membership proof for AOCL index {aocl_index}");
+                        continue;
+                    },
+                };
             ensure!(
                 1 == msmps_recovery_data.membership_proofs.len(),
                 "Expected only 1 MSMP to be returned by the server."
