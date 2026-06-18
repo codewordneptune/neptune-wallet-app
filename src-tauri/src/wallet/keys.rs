@@ -44,9 +44,9 @@ impl AddressRecord {
 
 impl super::WalletState {
     pub(crate) async fn get_address(&self, key_type: KeyType, index: u64) -> Result<String> {
-        let key = self.nth_spending_key(key_type, index);
+        let address = self.key.nth_receiving_address(index, key_type);
 
-        key.to_address().to_bech32m(self.network)
+        address.to_bech32m(self.network)
     }
 
     /// Return all addresses of the specified type, except for symmetric
@@ -105,12 +105,12 @@ impl super::WalletState {
             "Key index cannot exceed i32::MAX"
         );
 
-        let new_adress = self.nth_spending_key(key_type, key_index).to_address();
+        let new_address = self.key.nth_receiving_address(key_index, key_type);
         self.set_key_index(key_type, key_index.saturating_add(1))
             .await?;
 
         Ok(AddressRecord::new(
-            new_adress,
+            new_address,
             key_index.try_into().unwrap(),
             self.network,
             None,
@@ -223,7 +223,7 @@ impl super::WalletState {
                 if let Some(key) = self.key_cache.get_key(key_type, i) {
                     return (i, key);
                 }
-                let new_key = Arc::new(self.nth_spending_key(key_type, i));
+                let new_key = Arc::new(self.key.nth_spending_key(key_type, i));
                 self.key_cache.add_key(i, new_key.clone());
                 (i, new_key)
             })
@@ -243,24 +243,6 @@ impl super::WalletState {
         };
 
         keys
-    }
-
-    // TODO: Replace with same function in neptune-core, once available
-    // (anything after v0.11.0 should have this functionality).
-    /// Return the nth spending key, of the specified type.
-    fn nth_spending_key(&self, key_type: KeyType, derivation_index: u64) -> SpendingKey {
-        let wallet_entropy = &self.key;
-        match key_type {
-            KeyType::Generation => wallet_entropy
-                .nth_generation_spending_key(derivation_index)
-                .into(),
-            KeyType::Symmetric => wallet_entropy.nth_symmetric_key(derivation_index).into(),
-            KeyType::EcHybrid => wallet_entropy.nth_ec_hybrid_key(derivation_index).into(),
-            KeyType::ViewingAddress => wallet_entropy
-                .nth_viewing_address_key(derivation_index)
-                .into(),
-            _ => todo!("Only known key types are supported"),
-        }
     }
 }
 
