@@ -61,7 +61,7 @@ export default function LogPage() {
       }
     >
       <ScrollArea
-        h={"calc(100vh - 80px)"}
+        h={"calc(100vh - 110px)"}
         scrollbarSize={8}
         viewportRef={viewport}
         onScrollPositionChange={handleScroll}
